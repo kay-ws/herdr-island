@@ -406,10 +406,98 @@ usage 側も同様に、statusLine の stdin JSON サンプルから `$ctx` / `$
 6. `install.sh` を2回連続で実行し、settings.json / config.toml / ccstatus が
    重複エントリを持たないこと
 
-## 11. 未解決 / 実装時に決めること
+## 11. 実装時に判明して設計を変えた点
 
-- `Elicitation` イベントの実 payload を未確認。フィールド名（`message` / `mcp_server_name`）は
-  リファレンス記載どおりの想定だが、実物を見ていない。**取れなければ MCP 対応だけ落とす**
-  （許可待ち・質問待ちは独立して動く）
-- 40文字が実際の Agents パネル幅に対して適切かは実機で見て調整する
+実装後に追記。**以下は本文（第1〜10節）の記述を上書きする。**
+
+### 11.1 herdr CLI は使えない → socket API 直叩き
+
+第5.5節は `herdr pane report-metadata` を送信手段としていたが、**herdr 0.7.5 の
+この CLI は `--source` に値を渡せない**。13 パターン試した結果:
+
+| 渡し方 | 結果 |
+|---|---|
+| `--source hj` | `unknown option: hj` |
+| `--source=hj` | 認識されず → `missing required --source` |
+| `--source 1`（数値） | `unknown option: 1` |
+| 位置引数 `w0:p1` | `unknown option: w0:p1`（常に拒否） |
+| `-- w0:p1` | `unknown option: --` |
+| `--token reason=X` | **通る**（スペース形式） |
+| `--seq T` | **通る**（`--seq=T` は拒否） |
+
+help は `Usage: ... [OPTIONS] --source <ID> <PANE_ID>` と書いているが実装が伴っていない。
+rtk バイパス・`env -i` の最小環境でも同じで、環境要因ではない。
+
+**socket API なら動く**（実測で `{"result":{"type":"ok"}}`）:
+
+```
+method: pane.report_metadata
+params 必須: pane_id, source
+params 任意: tokens(object) / seq(int) / ttl_ms(int) / agent / title /
+             display_agent / state_labels / applies_to_source /
+             clear_title / clear_display_agent / clear_state_labels
+socket: $HERDR_SOCKET_PATH
+```
+
+- **クリアは `tokens: {reason: null}`**（実測: snapshot の `tokens` が `null` になる）。
+  `clear_token` に相当するパラメータは RPC に無い —— title / display_agent /
+  state_labels には専用フラグがあるのに token には無いので、null を入れるのが設計上の手段
+- トークンの格納先は `snapshot.panes[].tokens.<name>` と `snapshot.agents[].tokens.<name>`。
+  `herdr api snapshot` で検証できるので、**パネルの見え方と切り離して切り分けられる**
+- herdr 公式フック `herdr-agent-state.sh` も CLI を使わず socket 直叩き（python3）。
+  つまりこれが herdr の想定経路で、CLI を選んだ本設計が筋悪だった
+
+**依存が変わる。** 第4節の「依存は `jq` と `herdr` CLI のみ」→ **`jq` と `python3`**。
+送信手段は `nc -U -N` でも動いたが python3 を選んだ（kay の判断）。理由は公式フックと
+同じ経路であること、netcat は実装が3系統あって `-U` / `-N` の可否が環境で変わること。
+
+副産物としてテストが単純になった。JSON を送るので値の空白や `|` はそのまま 1
+フィールドとして届き、**シェル引数のクォート漏れという失敗モードが構造的に消える**。
+偽 socket サーバ（`tests/fake_socket.sh`）が受信 JSON をそのまま検証する。
+
+### 11.2 カスタムトークンは `$` 接頭辞が必須
+
+第7節の `{ token = "reason", ... }` は誤り。正しくは `{ token = "$reason", ... }`。
+
+```
+invalid ui config: unknown sidebar token `reason`;
+custom tokens must start with `$` ; keeping current ui settings
+```
+
+**`$` を忘れると `[ui]` 設定が丸ごと拒否される**（"keeping current ui settings"）ので、
+`row_gap` も `rows` も一切効かなくなる。built-in セグメント（`state_icon` /
+`workspace` / `tab` / `agent`）は `$` 無し。
+
+### 11.3 `agent_panel_sort` はマーカーブロックに書けない
+
+第7節・第8.2節はブロック内に `agent_panel_sort = "priority"` を書く形だったが、
+これは末尾追記されるブロックでは不可能:
+
+- ブロック内で `[ui]` を定義すると既存 `[ui]` と衝突して `Cannot declare ('ui',) twice`
+- `ui.agent_panel_sort = "..."` と書くと直前のテーブル内のキーと解釈され
+  `ui.ui.agent_panel_sort` になる。**パースは通るので気づけない**
+
+install.sh が3経路で `[ui]` へ入れる形にした（既存キーの置換 / `[ui]` 直後への挿入 /
+`[ui]` が無ければブロックの後に `[ui]` を作る）。`[ui.sidebar.agents]` を先に書いてから
+`[ui]` を後付け定義するのは TOML で許されることを実測で確認済み。
+
+### 11.4 その他
+
+- 設定リロードは `herdr server reload-config`（`herdr config reload` は存在しない）
+- `tests/run.sh` は nullglob が無く、テスト 0 件のとき glob がリテラルのまま bash に
+  渡って誤爆していた。Task 1 で修正
+- `label` は jq の予約語（`label $out | break`）なので関数名に使えない。`heading` にした
+
+## 12. 未解決 / 実装時に決めること
+
+- `Elicitation` イベントの実 payload を未確認。`reason-filter.jq` は扱えるが
+  `install.sh` は**意図的に配線していない**。payload を確認できたら 1 エントリ足すだけ。
+  許可待ち・質問待ちはこれと独立に動くので未配線でも機能は完結している
+- 40文字が実際の Agents パネル幅に対して適切かは実機で見て調整する（未確認）
 - herdr 側がトークンを自動 truncate するのか、はみ出すのかは未確認
+- **許可プロンプトでの自動発火は未検証。** フック本体を手で叩いた検証は済んでいる
+  （`tokens` に値が入ることを snapshot で確認）が、`settings.json` の配線経由で
+  実際に `PermissionRequest` が飛ぶかは次セッション以降でしか見られない
+  （Claude Code はフック設定を起動時に読む）
+- **拒否時に `PostToolBatch` が発火するかは未確認。** `Stop` フックが取りこぼしを
+  回収する設計なので、どちらでも reason は消えるはず

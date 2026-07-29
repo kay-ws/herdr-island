@@ -138,12 +138,27 @@ HERDR_JUMP_PREFIX="$root2" bash "$INSTALL" >/dev/null 2>&1
 assert_eq "yes" "$(sort_in_ui "$root2/.config/herdr/config.toml")" \
   "[ui] が無い config でも agent_panel_sort が入る"
 
+r2run1="$(cat "$root2/.config/herdr/config.toml")"
+
 HERDR_JUMP_PREFIX="$root2" bash "$INSTALL" >/dev/null 2>&1
+r2run2="$(cat "$root2/.config/herdr/config.toml")"
+
 c="$(grep -cE '^[[:space:]]*agent_panel_sort[[:space:]]*=' "$root2/.config/herdr/config.toml")"
 assert_eq "1" "$c" "[ui] 無し経路でも 2 回目に重複しない"
 
 c="$(grep -c '^\[ui\]' "$root2/.config/herdr/config.toml")"
 assert_eq "1" "$c" "[ui] 無し経路でも [ui] は 1 つだけ"
+
+# run1 と run2 でレイアウトが変わる（run1 は [ui] がマーカーブロックの後ろ、
+# run2 は前）。run2 以降が不動点であることを完全比較で確かめる
+HERDR_JUMP_PREFIX="$root2" bash "$INSTALL" >/dev/null 2>&1
+r2run3="$(cat "$root2/.config/herdr/config.toml")"
+assert_eq "$r2run2" "$r2run3" "[ui] 無し経路は run2 以降が不動点"
+
+# run1 → run2 で変わること自体は仕様。変わらないなら上の比較が無意味になるので
+# ここで固定しておく
+assert_eq "no" "$( [ "$r2run1" = "$r2run2" ] && echo yes || echo no )" \
+  "[ui] 無し経路は run1 と run2 でレイアウトが変わる（仕様）"
 
 rm -rf "$root2"
 
