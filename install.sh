@@ -5,7 +5,7 @@
 #   ~/.claude/settings.json      … reason フックの 4 イベント
 #   ~/.config/herdr/config.toml  … 行テンプレートと agent_panel_sort
 #   ~/.local/bin/ccstatus        … usage push の 1 行
-#   ~/.codex/hooks.json          … reason フックの 4 イベント（Codex 側）
+#   ~/.codex/hooks.json          … reason、model、context 使用率のフック
 #
 # ~/.codex/config.toml は触らない。trusted_hash の入力正規化を特定できないため、
 # 推測した値を書くと Codex がフックを黙って無効化する。承認は次回起動時に 1 回。
@@ -22,6 +22,7 @@ STAMP="$(date +%Y%m%d-%H%M%S-%3N)"
 # dirname "${BASH_SOURCE[0]}" がリンクの置き場所を指し、隣の
 # reason-filter.jq を見つけられなくなる
 HOOK="$HERE/hooks/herdr-jump-reason.sh"
+CODEX_USAGE="$HERE/hooks/herdr-codex-usage.sh"
 PUSH="$HERE/statusline/herdr-usage-push"
 ROWS="$HERE/config/agents-rows.toml"
 
@@ -53,20 +54,29 @@ backup() { [ -f "$1" ] && cp -p "$1" "$1.bak.$STAMP"; return 0; }
 
 wire_hook_events() {
   local f="$1"
+  local with_model="${2:-0}"
   mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
   [ -f "$f" ] || echo '{}' > "$f" || return 1
   backup "$f"
 
+  # jq は 1 回で完結させる。2 段に分けると 1 段目が入れたエントリを 2 段目の
+  # purge が巻き込んで消す（実際にそうなっていて、Codex の Stop から reason の
+  # clear が消えていた ＝ 拒否・中断時に理由が TTL まで残る状態だった）
   local tmp; tmp="$(tmpfor "$f" json)"
   jq \
-    --arg set   "bash '$HOOK' set" \
-    --arg clear "bash '$HOOK' clear" '
-    # 既存の herdr-jump エントリを取り除く。他人のフックには触らない。
+    --arg set        "bash '$HOOK' set" \
+    --arg clear      "bash '$HOOK' clear" \
+    --arg model      "bash '$HOOK' model" \
+    --arg usage      "bash '$CODEX_USAGE'" \
+    --arg with_model "$with_model" '
+    # 自分が入れたエントリだけを取り除く。他人のフック（superset や herdr 公式の
+    # herdr-agent-state.sh）には触らない。
     # .hooks が無い / null のグループがあっても落ちないよう (. // []) で守る
     # （落ちると jq が非ゼロで終わり、配線がまるごと黙って飛ぶ）
     def purge:
       (. // [])
-      | map(.hooks |= ((. // []) | map(select(((.command // "") | contains("herdr-jump-reason")) | not))))
+      | map(.hooks |= ((. // []) | map(select(
+          ((.command // "") | test("herdr-jump-reason|herdr-codex-usage")) | not))))
       | map(select((.hooks | length) > 0));
 
     def entry($matcher; $cmd):
@@ -77,7 +87,15 @@ wire_hook_events() {
     | .hooks.PermissionRequest   = ((.hooks.PermissionRequest | purge) + [entry("*"; $set)])
     | .hooks.PreToolUse          = ((.hooks.PreToolUse        | purge) + [entry("AskUserQuestion"; $set)])
     | .hooks.PostToolBatch       = ((.hooks.PostToolBatch     | purge) + [entry(""; $clear)])
-    | .hooks.Stop                = ((.hooks.Stop              | purge) + [entry(""; $clear)])
+    # Stop は reason の clear が本体。Codex ではそこに usage の収集を足す。
+    # 順序は clear → usage（どちらも独立だが、消す方を先に通す）
+    | .hooks.Stop                = ((.hooks.Stop              | purge) + [entry(""; $clear)]
+                                    + (if $with_model == "1" then [entry(""; $usage)] else [] end))
+    # Codex の共通フック入力には active model slug がある。SessionStart は
+    # startup / resume / clear / compact の全経路で走るため matcher 無しで拾う
+    | (if $with_model == "1"
+       then .hooks.SessionStart = ((.hooks.SessionStart | purge) + [entry(""; $model)])
+       else . end)
   ' "$f" > "$tmp" && mv "$tmp" "$f"
 }
 
@@ -191,13 +209,13 @@ WARN
 
 # --- 実行 -------------------------------------------------------------------
 
-chmod +x "$HOOK" "$PUSH" 2>/dev/null
+chmod +x "$HOOK" "$PUSH" "$CODEX_USAGE" 2>/dev/null
 
 echo "herdr-jump をインストールします (prefix: $PREFIX)"
 wire_hook_events   "$SETTINGS"   && echo "  ok: $SETTINGS"
 wire_herdr_config  "$HERDRCFG"   && echo "  ok: $HERDRCFG"
 wire_ccstatus      "$CCSTATUS"   && echo "  ok: $CCSTATUS"
-wire_hook_events   "$CODEXHOOKS" && echo "  ok: $CODEXHOOKS"
+wire_hook_events   "$CODEXHOOKS" 1 && echo "  ok: $CODEXHOOKS"
 
 # v1 の名残を知らせる。消すのは越権なので警告だけ出す
 if [ -f "$HERDRCFG" ] && grep -q 'herdr-jump\.sh' "$HERDRCFG"; then

@@ -30,6 +30,20 @@ assert_eq "Bash: ls -la"         "$(sent '.params.tokens.reason')" "reason ト�
 assert_eq "900000"               "$(sent '.params.ttl_ms')"     "reason の TTL は 15 分"
 assert_eq "number"               "$(sent '.params.seq | type')" "seq は数値で入る"
 
+# --- model: Codex SessionStart の共通フィールド -----------------------------
+
+run_hook model '{"hook_event_name":"SessionStart","source":"startup","model":"gpt-5.6-sol"}'
+assert_eq "gpt-5.6-sol" "$(sent '.params.tokens.model')" "Codex の model slug を送る"
+assert_eq "false" "$(sent '.params.tokens | has("reason")')" \
+  "model 更新時に reason を上書きしない"
+assert_eq "null" "$(sent '.params.ttl_ms // "null"')" "model に TTL は付けない"
+
+run_hook model '{"hook_event_name":"SessionStart","source":"startup"}'
+assert_eq "yes" "$(nothing_sent)" "model が無い payload では何も送らない"
+
+run_hook model '{"model":42}'
+assert_eq "yes" "$(nothing_sent)" "model が文字列でなければ何も送らない"
+
 # 空白を含む値が JSON の 1 フィールドとして届くこと。CLI 引数ではなく JSON で
 # 送るので word splitting の余地が構造的に無い
 run_hook set '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"header":"実装 方針 A|B"}]}}'

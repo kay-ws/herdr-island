@@ -19,7 +19,9 @@ herdr の Agents パネルに「何で止まっているか」と context 使用
 |---|---|---|
 | `state_icon` / `workspace` / `tab` / `agent` / `state_text` | herdr 内蔵 | 常時 |
 | `$reason` | `PermissionRequest` / `PreToolUse(AskUserQuestion)` フック | 止まった瞬間に1回 |
-| `$model` / `$ctx` / `$limits` | `ccstatus`（statusLine）の stdin JSON | 毎ターン |
+| Claude の `$model` / `$ctx` / `$limits` | `ccstatus`（statusLine）の stdin JSON | 毎ターン |
+| Codex の `$model` | `SessionStart` フックの stdin JSON | 起動・再開・compact 後 |
+| Codex の `$ctx` | セッション JSONL の最新 `token_count` | 毎ターン |
 
 止まり方は1種類ではない。許可待ち（`PermissionRequest`）と質問待ち
 （`AskUserQuestion`）は別のイベントで届くので、両方を拾っている。
@@ -38,7 +40,9 @@ reason と usage は独立した2本の配管で、互いを知らない。**そ
 送っても `reason` は残る（実測で確認済み）。置換方式なら usage push が reason を消し
 続けて機能しないので、これは配管を分ける前提そのもの。
 
-Codex では reason のみ（statusLine 相当の仕組みが無いため）。
+Codex では model、reason、context 使用率を表示する。statusLine 相当の仕組みが
+無いため、context 使用率は `CODEX_THREAD_ID` に対応するセッション JSONL から
+応答完了時に取得する。rate limits は表示しない。
 
 reason は 40 文字で切る。切り捨ては jq の文字列スライスで行うので、日本語混じりでも
 バイト境界を割らない。
@@ -57,7 +61,7 @@ reason は 40 文字で切る。切り捨ては jq の文字列スライスで�
 | `~/.claude/settings.json` | `PermissionRequest` / `PreToolUse` / `PostToolBatch` / `Stop` の4フック |
 | `~/.config/herdr/config.toml` | `[ui.sidebar.agents]` の行テンプレートと `agent_panel_sort` |
 | `~/.local/bin/ccstatus` | usage push の1行（`crmux` 行の直後） |
-| `~/.codex/hooks.json` | 同じ4フック（Codex はスキーマ互換） |
+| `~/.codex/hooks.json` | 同じ4フック + model と context 使用率（Codex はスキーマ互換） |
 
 インストール後:
 

@@ -156,6 +156,54 @@ evs="$(jq -r '.hooks | keys[]' "$root/.codex/hooks.json" | sort | tr '\n' ' ')"
 assert_eq "PermissionRequest PostToolBatch PreToolUse SessionStart Stop " "$evs" \
   "codex も 4 イベント + SessionStart"
 
+n="$(jq '[.hooks.SessionStart[].hooks[]
+  | select(.command | contains("herdr-jump-reason.sh") and endswith(" model"))] | length' \
+  "$root/.codex/hooks.json")"
+assert_eq "1" "$n" "codex の SessionStart に model 送信を 1 本だけ配線する"
+
+n="$(jq '[.hooks.Stop[].hooks[]
+  | select(.command | contains("herdr-codex-usage.sh"))] | length' \
+  "$root/.codex/hooks.json")"
+assert_eq "1" "$n" "codex の Stop に context 使用率送信を 1 本だけ配線する"
+
+n="$(jq '[.hooks.SessionStart[].hooks[]
+  | select(.command | contains("herdr-agent-state.sh"))] | length' \
+  "$root/.codex/hooks.json")"
+assert_eq "1" "$n" "codex の既存 SessionStart と共存する"
+
+assert_eq "false" "$(jq '[.hooks.SessionStart[]?.hooks[]?
+  | select(.command | contains("herdr-jump-reason.sh") and endswith(" model"))] | length > 0' \
+  "$root/.claude/settings.json")" \
+  "Claude には model の SessionStart を追加しない"
+
+assert_eq "false" "$(jq '[.hooks.Stop[]?.hooks[]?
+  | select(.command | contains("herdr-codex-usage.sh"))] | length > 0' \
+  "$root/.claude/settings.json")" \
+  "Claude には Codex usage フックを追加しない"
+
+# Codex の Stop には reason の clear と usage の両方が要る。
+# jq を 2 段に分けていた頃、2 段目の purge が 1 段目の clear を巻き込んで消し、
+# 拒否・中断時に reason が TTL まで残る状態になっていた
+stop_cmds="$(jq -r '[.hooks.Stop[].hooks[].command] | join(" ")' "$root/.codex/hooks.json")"
+assert_eq "yes" "$(printf '%s' "$stop_cmds" | grep -q "herdr-jump-reason.*clear" && echo yes || echo no)" \
+  "codex の Stop に reason の clear が残る"
+assert_eq "yes" "$(printf '%s' "$stop_cmds" | grep -q 'herdr-codex-usage' && echo yes || echo no)" \
+  "codex の Stop に usage 収集がある"
+assert_eq "2" "$(jq '[.hooks.Stop[].hooks[]] | length' "$root/.codex/hooks.json")" \
+  "codex の Stop は clear と usage の 2 エントリ"
+
+# Claude 側は usage 収集を配線しない（statusLine があるので不要）
+assert_eq "1" "$(jq '[.hooks.Stop[].hooks[]] | length' "$root/.claude/settings.json")" \
+  "claude の Stop は clear の 1 エントリだけ"
+assert_eq "no" "$(jq -r '[.hooks.Stop[].hooks[].command] | join(" ")' "$root/.claude/settings.json" \
+  | grep -q 'herdr-codex-usage' && echo yes || echo no)" \
+  "claude 側に codex 用の usage フックを入れない"
+
+# 再実行しても Stop が増えない（purge が両方を消してから足すこと）
+HERDR_JUMP_PREFIX="$root" bash "$INSTALL" >/dev/null 2>&1
+assert_eq "2" "$(jq '[.hooks.Stop[].hooks[]] | length' "$root/.codex/hooks.json")" \
+  "再実行しても codex の Stop は 2 エントリのまま"
+
 b="$(find "$root" -name '*.bak.*' | wc -l)"
 assert_eq "yes" "$( [ "$b" -ge 4 ] && echo yes || echo "no($b)" )" \
   "4 ファイル分のバックアップを取る"

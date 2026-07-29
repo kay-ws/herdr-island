@@ -33,5 +33,6 @@ codex = [
   ["state_icon", "workspace", "tab"],
   ["agent", { token = "$model", dim = true }],
   ["state_text", { token = "$reason", fg = "#f9e2af", bold = true }],
+  [{ token = "$ctx", fg = "#89b4fa" }],
 ]
 # <<< herdr-jump (managed) <<<
