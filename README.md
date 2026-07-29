@@ -9,18 +9,29 @@ herdr の Agents パネルに「何で止まっているか」と context 使用
 ## 何が出るか
 
 ```
-● ws0  tab1
-  Bash: Remove node_modules        ← 何で止まっているか
-  42%  5h 11% | 7d 3%              ← context 使用率と rate limits
+✓ ~ · 1
+  claude · Opus 5 (1M context)          ← どのエージェント / どのモデル
+  working  Bash: Remove node_modules    ← 状態と、止まっているならその理由
+  39% · 5h 12% | 7d 14%                 ← context 使用率と rate limits
 ```
 
-| 行 | 出所 | 発火 |
+| セグメント | 出所 | 発火 |
 |---|---|---|
-| reason | `PermissionRequest` / `PreToolUse(AskUserQuestion)` フック | 止まった瞬間に1回 |
-| ctx / limits | `ccstatus`（statusLine）の stdin JSON | 毎ターン |
+| `state_icon` / `workspace` / `tab` / `agent` / `state_text` | herdr 内蔵 | 常時 |
+| `$reason` | `PermissionRequest` / `PreToolUse(AskUserQuestion)` フック | 止まった瞬間に1回 |
+| `$model` / `$ctx` / `$limits` | `ccstatus`（statusLine）の stdin JSON | 毎ターン |
 
 止まり方は1種類ではない。許可待ち（`PermissionRequest`）と質問待ち
 （`AskUserQuestion`）は別のイベントで届くので、両方を拾っている。
+
+**auto mode を常用しているなら、実際に効くのは `AskUserQuestion` の経路。**
+auto mode では許可プロンプトがほとんど出ないので `PermissionRequest` の出番が少なく、
+一方ユーザーへの質問は auto mode でも止まる。
+
+`$reason` は**止まっている間しか値が入らない**。`Stop` フックがターンごとにクリアする
+ので、エージェントが動き終わった後に見ると空になっている。これは仕様 ——
+応答済みの理由を残すと嘘になるため。だから `state_text`（`working` / `idle`）と
+同じ行に置いて、空のときも行が意味を持つようにしている。
 
 reason と usage は独立した2本の配管で、互いを知らない。**それが成り立つのは herdr が
 `tokens` をキー単位でマージするから** —— 毎ターン走る usage push が `{ctx, limits}` を
