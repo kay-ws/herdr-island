@@ -69,16 +69,28 @@ agent explain →  state: working
 
 ### 環境変数
 
-キーバインド起動のコマンドには以下が注入される（file-picker 実装で確認）。
+キーバインド起動のコマンドには以下が注入される（herdr 0.7.5 で `env | grep ^HERDR` を実測）。
 
-| 変数 | 内容 |
-|---|---|
-| `HERDR_ENV` | Herdr セッション内なら `1` |
-| `HERDR_ACTIVE_PANE_ID` | 呼び出し元ペイン（＝自分） |
-| `HERDR_ACTIVE_PANE_CWD` | 同 cwd |
-| `HERDR_SELF_PANE` | popup 自身のペイン ID |
+命名は **無印 = popup 自身 / `ACTIVE_` 付き = 呼び出し元** で、pane・tab・workspace の 3 階層すべてがこの対で揃っている。
+
+| 変数 | 内容 | 実測値の例 |
+|---|---|---|
+| `HERDR_ENV` | Herdr セッション内なら `1` | `1` |
+| `HERDR_PANE_ID` | popup 自身のペイン ID | `w0:pD` |
+| `HERDR_TAB_ID` | popup 自身のタブ ID | `w0:t1` |
+| `HERDR_WORKSPACE_ID` | popup 自身のワークスペース ID | `w0` |
+| `HERDR_ACTIVE_PANE_ID` | 呼び出し元ペイン | `w0:p1` |
+| `HERDR_ACTIVE_PANE_CWD` | 呼び出し元の cwd | `/home/kay` |
+| `HERDR_ACTIVE_TAB_ID` | 呼び出し元のタブ ID | `w0:t1` |
+| `HERDR_ACTIVE_WORKSPACE_ID` | 呼び出し元のワークスペース ID | `w0` |
+| `HERDR_BIN_PATH` | herdr 実行ファイルの絶対パス | `/home/kay/.local/bin/herdr` |
+| `HERDR_SOCKET_PATH` | herdr サーバの制御 socket | `~/.config/herdr/herdr.sock` |
 
 `HERDR_ACTIVE_PANE_ID` は通常のシェルには注入されない（キーバインド起動時のみ）。
+
+`HERDR_SELF_PANE` という変数は**存在しない**。当初 file-picker の記憶からそう書いていたが、実測では未定義だった。popup 自身を指すのは `HERDR_PANE_ID`。
+
+`HERDR_SOCKET_PATH` があるため、popup から `setsid` で切り離した子プロセスも herdr CLI を叩き続けられる。popup の寿命を超えて動く処理を持たせる余地がある。
 
 ## 構造
 
@@ -94,10 +106,12 @@ config.toml:  [[keys.command]] key="alt+j" type="pane" command="herdr-jump.sh"
                        │  ③ fzf                     選択
                        │  ④ herdr agent focus <pane_id>
                        ▼
-                 trap EXIT → herdr pane close "$HERDR_SELF_PANE"
+                 スクリプト終了 → herdr が popup ペインを自前で畳む
 ```
 
-`herdr-file-picker.sh` と同じ骨格に揃える。`#!/bin/bash` / `set -euo pipefail` / `HERDR_ENV` ガード / trap 自己クローズ / fzf `--reverse` / 日本語コメント。
+`herdr-file-picker.sh` と同じ骨格に揃える。`#!/bin/bash` / `set -euo pipefail` / `HERDR_ENV` ガード / fzf `--reverse` / 日本語コメント。
+
+**自己クローズは書かない。** `type = "pane"` の popup は、起動したコマンドが終了した時点で herdr が閉じる（実測。`HERDR_PANE_ID` を参照しないプローブでも popup は消えた）。`trap EXIT → herdr pane close` を足すのは無駄であり、閉じる主体が二重になるぶん壊れやすい。
 
 配置は既存の慣習に従う。
 
@@ -216,17 +230,26 @@ Herdr は実プロセスを要するため、テスト可能な範囲を切り�
 3. Esc で何も起きないか
 4. 対象ペインを閉じてから `alt+j` → 一覧に出ないか
 
-## 未検証のリスクと実装の一手目
+## 最大のリスクと、それを潰した実測（2026-07-30）
 
-**popup を閉じる際に Herdr が呼び出し元ペインへフォーカスを戻す可能性がある。** もし戻すなら `agent focus` の直後に trap がそれを打ち消し、「飛ばない」という現状と同じ症状になる。
+懸念は **popup を閉じる際に Herdr が呼び出し元ペインへフォーカスを戻すのではないか** という点だった。もし戻すなら `agent focus` の効果が打ち消され、「飛ばない」という現状と同じ症状になる。設計の成否を分けるため、実装の一手目をこの検証に充てた。
 
-これは設計の成否を分けるので、**実装の一手目をこの検証に充てる**。上記テスト項目 2 を最小スクリプトで単独に確かめてから本体を書く。
+**結果は白。** `tests/probe_focus_retention.sh` を `alt+p` にバインドして実機で計測した。
 
-黒だった場合の回避策候補（実測してから選ぶ）:
+| 時点 | フォーカス位置 |
+|---|---|
+| popup 起動直後 | `w0:pC`（popup 自身） |
+| `agent focus w0:p8` 直後（popup はまだ開いている） | `w0:p8` |
+| popup 消滅後 1〜5 秒（1 秒刻みで 5 回） | `w0:p8` のまま |
 
-- フォーカス処理を popup 終了後まで生き残る子プロセスへ逃がす
-- `type` を変えて popup を使わない形にする
-- `~/project/herdr/` にある Herdr 本体のソースを読み、フォーカス復帰の条件を確定させる
+呼び出し元 `w0:p1` へ戻る挙動は観測されなかった。目視でも、押した本人が codex ペインに着地して手で戻る必要があった。
+
+回避策の検討（子プロセスへの退避、`type` の変更、Herdr 本体のソース読解）はいずれも不要になった。
+
+計測にあたっては 2 点はまった。どちらも観測手法の問題で、設計そのものとは無関係:
+
+- **観測者を `agent focus` より後に起動すると死ぬ。** popup がフォーカスを失った時点で herdr がペインを畳むため、スクリプト末尾に置いた `setsid` に到達できない。観測者は状態を壊す操作より前に切り離す。
+- **手で戻る操作が測定を汚す。** 押した本人が 5 秒以内に元ペインへ戻ると、自動観測と人間の操作が同じ状態を奪い合う。測定窓を明示的に空ける。
 
 ## スコープ外
 
