@@ -481,7 +481,26 @@ install.sh が3経路で `[ui]` へ入れる形にした（既存キーの置換
 `[ui]` が無ければブロックの後に `[ui]` を作る）。`[ui.sidebar.agents]` を先に書いてから
 `[ui]` を後付け定義するのは TOML で許されることを実測で確認済み。
 
-### 11.4 その他
+### 11.4 `tokens` はキー単位でマージされる（配管を分ける前提）
+
+第4節は reason と usage を「独立した2本の配管」としたが、**両方が同じ `tokens`
+オブジェクトに書く**ので、herdr が置換方式なら毎ターン走る usage push が reason を
+消し続けて機能が成立しない。設計時にこれを確認していなかった。
+
+実測ではキー単位のマージだった:
+
+```
+1) reason を送る    → {"ctx":"34%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+2) usage push       → {"ctx":"35%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+3) usage push 2回目 → {"ctx":"36%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+```
+
+`ctx` は更新され `reason` は残る。クリアも `tokens: {reason: null}` で reason だけが
+消え `ctx` は残る。したがって配管の独立性はこのマージ挙動に依存している。
+**herdr 側の実装に依存する前提なので、herdr の更新時に再確認すべき項目。**
+偽 socket サーバは受信 JSON を記録するだけなのでテストでは固定できない。
+
+### 11.5 その他
 
 - 設定リロードは `herdr server reload-config`（`herdr config reload` は存在しない）
 - `tests/run.sh` は nullglob が無く、テスト 0 件のとき glob がリテラルのまま bash に

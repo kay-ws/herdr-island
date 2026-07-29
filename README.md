@@ -22,6 +22,11 @@ herdr の Agents パネルに「何で止まっているか」と context 使用
 止まり方は1種類ではない。許可待ち（`PermissionRequest`）と質問待ち
 （`AskUserQuestion`）は別のイベントで届くので、両方を拾っている。
 
+reason と usage は独立した2本の配管で、互いを知らない。**それが成り立つのは herdr が
+`tokens` をキー単位でマージするから** —— 毎ターン走る usage push が `{ctx, limits}` を
+送っても `reason` は残る（実測で確認済み）。置換方式なら usage push が reason を消し
+続けて機能しないので、これは配管を分ける前提そのもの。
+
 Codex では reason のみ（statusLine 相当の仕組みが無いため）。
 
 reason は 40 文字で切る。切り捨ては jq の文字列スライスで行うので、日本語混じりでも
