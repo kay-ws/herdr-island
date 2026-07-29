@@ -1,0 +1,34 @@
+#!/bin/bash
+# statusLine の stdin JSON から context 使用率を読み、
+# herdr Agents パネルへ push する。ccstatus から & で呼ばれる。
+#
+# 毎ターン起動される。前回値と比較してスキップする最適化は入れない
+# （状態ファイルを持つ複雑さが 1 プロセス分のコストに見合わない）。
+
+[ "${HERDR_ENV:-}" = "1" ]       || exit 0
+[ -n "${HERDR_PANE_ID:-}" ]      || exit 0
+command -v herdr >/dev/null 2>&1 || exit 0
+command -v jq    >/dev/null 2>&1 || exit 0
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
+
+# IFS=タブ で read する。"${line#*\t}" だと、タブを含まない出力のとき
+# limits が ctx と同じ値になってしまう（パラメータ展開は非マッチ時に原文を返す）
+line="$(jq -r -f "$here/usage-filter.jq" 2>/dev/null)"
+IFS=$'\t' read -r ctx limits <<< "$line"
+
+# ctx が取れないうちは何も送らない。まだ API 応答が返っていない状態
+[ -n "$ctx" ] || exit 0
+
+args=( --source herdr-jump --token "ctx=$ctx" )
+# limits はセッション最初の API 応答後にしか出ない。無い間は送らないだけで、
+# クリアはしない（前の値が TTL まで残るが実害が無い）
+[ -n "$limits" ] && args+=( --token "limits=$limits" )
+
+herdr pane report-metadata \
+  "${args[@]}" \
+  --seq "$(date +%s%3N)" \
+  --ttl-ms 3600000 \
+  "$HERDR_PANE_ID" >/dev/null 2>&1
+
+exit 0
