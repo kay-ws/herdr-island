@@ -20,14 +20,18 @@
 row_gap = 0
 rows = [["state_icon", "workspace", "tab"], ["agent"]]
 
+# state_text（idle / working など）を reason と同じ行に置く。reason は
+# 止まっている間しか値が入らないので、空のときに行が寂しくならない
 [ui.sidebar.agents.rows_by_agent]
 claude = [
   ["state_icon", "workspace", "tab"],
-  [{ token = "$reason", fg = "#f38ba8", bold = true }],
+  ["agent", { token = "$model", dim = true }],
+  ["state_text", { token = "$reason", fg = "#f38ba8", bold = true }],
   [{ token = "$ctx", fg = "#89b4fa" }, { token = "$limits", dim = true }],
 ]
 codex = [
   ["state_icon", "workspace", "tab"],
-  [{ token = "$reason", fg = "#f9e2af", bold = true }],
+  ["agent", { token = "$model", dim = true }],
+  ["state_text", { token = "$reason", fg = "#f9e2af", bold = true }],
 ]
 # <<< herdr-jump (managed) <<<
