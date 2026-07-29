@@ -11,13 +11,15 @@ source "$here/fake_socket.sh"
 PUSH="$here/../statusline/herdr-usage-push"
 
 start_fake_socket || { echo "セットアップ失敗" >&2; exit 1; }
+# 異常終了しても偽 socket の python3 を孤児にしない
+trap stop_fake_socket EXIT
 
 run_push() {
   reset_capture
   printf '%s' "$1" | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$PUSH" >/dev/null 2>&1
 }
 
-full='{"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":1000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":81000}},"rate_limits":{"five_hour":{"used_percentage":11.4},"seven_day":{"used_percentage":2.6}}}'
+full='{"model":{"display_name":"Opus 5"},"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":1000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":81000}},"rate_limits":{"five_hour":{"used_percentage":11.4},"seven_day":{"used_percentage":2.6}}}'
 
 run_push "$full"
 assert_eq "pane.report_metadata" "$(sent '.method')"                 "method は pane.report_metadata"
@@ -30,6 +32,12 @@ assert_eq "number"               "$(sent '.params.seq | type')"      "seq は数
 # 空白と | を含む値が JSON の 1 フィールドとして届くこと
 assert_eq "5h 11% | 7d 3%" "$(sent '.params.tokens.limits')" \
   "空白と | を含む limits もそのまま届く"
+assert_eq "Opus 5" "$(sent '.params.tokens.model')" "model トークンを送る"
+
+# model が無い payload では model を含めない
+run_push '{"context_window":{"context_window_size":100,"current_usage":{"input_tokens":50}}}'
+assert_eq "50%" "$(sent '.params.tokens.ctx')"                 "model 無しでも ctx は送る"
+assert_eq "null" "$(sent '.params.tokens.model // "null"')"     "model が無い時は含めない"
 
 no_limits='{"context_window":{"context_window_size":200000,"current_usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":50000}}}'
 run_push "$no_limits"

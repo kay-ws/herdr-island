@@ -2,8 +2,12 @@
 # herdr Agents パネルに「何で止まっているか」を出す。
 #
 # 使い方: このスクリプトを Claude Code / Codex のフックから呼ぶ。
-#   set   … PermissionRequest / PreToolUse(AskUserQuestion) / Elicitation
+#   set   … PermissionRequest / PreToolUse(AskUserQuestion)
 #   clear … PostToolBatch / Stop
+#
+# reason-filter.jq は Elicitation（MCP の入力待ち）も扱えるが、payload を
+# 実物で確認していないため install.sh では配線していない。確認できたら
+# install.sh に 1 エントリ足すだけで有効になる。
 #
 # herdr CLI ではなく socket API を叩く（理由は lib/herdr-send.py の冒頭参照）。
 #

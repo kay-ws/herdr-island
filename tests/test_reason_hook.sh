@@ -11,6 +11,8 @@ source "$here/fake_socket.sh"
 HOOK="$here/../hooks/herdr-jump-reason.sh"
 
 start_fake_socket || { echo "セットアップ失敗" >&2; exit 1; }
+# 異常終了しても偽 socket の python3 を孤児にしない
+trap stop_fake_socket EXIT
 
 # run_hook <mode> <json> : ガードを揃えてフックを実行する
 run_hook() {
@@ -37,9 +39,15 @@ assert_eq "質問: 実装 方針 A|B" "$(sent '.params.tokens.reason')" \
 # --- clear -------------------------------------------------------------------
 
 run_hook clear '{}'
-assert_eq "pane.report_metadata" "$(sent '.method')"                "clear も同じ method"
-assert_eq "null" "$(sent '.params.tokens.reason // "null"')"        "clear は reason を null にする"
-assert_eq "null" "$(sent '.params.ttl_ms // "null"')"               "clear に TTL は付けない"
+assert_eq "pane.report_metadata" "$(sent '.method')" "clear も同じ method"
+
+# `.tokens.reason // "null"` では「明示的な JSON null」と「キーそのものが無い」を
+# 区別できない。RPC に clear_token 相当が無いので null を入れるのが唯一の
+# クリア手段であり、それが消えても素通りするテストでは意味がない。
+# キーの存在と値の型を別々に見る
+assert_eq "true" "$(sent '.params.tokens | has("reason")')" "clear は reason キーを含める"
+assert_eq "null" "$(sent '.params.tokens.reason | type')"   "その値は JSON の null"
+assert_eq "null" "$(sent '.params.ttl_ms // "null"')"       "clear に TTL は付けない"
 
 # --- ガード。いずれも何も送らずに黙って抜けること ----------------------------
 

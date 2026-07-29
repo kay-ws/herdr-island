@@ -20,18 +20,22 @@ SEND="$here/../lib/herdr-send.py"
 # IFS=タブ で read する。"${line#*\t}" だと、タブを含まない出力のとき
 # limits が ctx と同じ値になってしまう（パラメータ展開は非マッチ時に原文を返す）
 line="$(jq -r -f "$here/usage-filter.jq" 2>/dev/null)"
-IFS=$'\t' read -r ctx limits <<< "$line"
+IFS=$'\t' read -r ctx limits model <<< "$line"
 
 # ctx が取れないうちは何も送らない。まだ API 応答が返っていない状態
 [ -n "$ctx" ] || exit 0
 
-# limits はセッション最初の API 応答後にしか出ない。無い間は tokens に
-# 含めないだけで、クリアはしない（前の値が TTL まで残るが実害が無い）
-jq -nc --arg p "$HERDR_PANE_ID" --arg c "$ctx" --arg l "$limits" --argjson seq "$(date +%s%3N)" \
+# limits はセッション最初の API 応答後にしか出ない。model は statusLine の
+# payload に常にあるが念のため空を許す。無い間は tokens に含めないだけで、
+# クリアはしない（前の値が TTL まで残るが実害が無い）
+jq -nc --arg p "$HERDR_PANE_ID" --arg c "$ctx" --arg l "$limits" --arg m "$model" \
+       --argjson seq "$(date +%s%3N)" \
   '{id: "herdr-jump",
     method: "pane.report_metadata",
     params: { pane_id: $p, source: "herdr-jump",
-              tokens: ({ ctx: $c } + (if $l == "" then {} else { limits: $l } end)),
+              tokens: ({ ctx: $c }
+                       + (if $l == "" then {} else { limits: $l } end)
+                       + (if $m == "" then {} else { model:  $m } end)),
               seq: $seq, ttl_ms: 3600000 }}' \
   2>/dev/null | python3 "$SEND"
 

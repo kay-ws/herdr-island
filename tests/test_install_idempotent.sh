@@ -10,15 +10,46 @@ INSTALL="$here/../install.sh"
 
 # --- 検証ヘルパ ---------------------------------------------------------------
 
-# [ui] セクション内に agent_panel_sort = "priority" があるか。
-# TOML パーサを持ち込まずに awk でセクション境界を見る
+# [ui] セクション内に agent_panel_sort = "priority" があるか（テキスト近似）
 sort_in_ui() {
   awk '
     /^\[ui\][[:space:]]*$/ { f = 1; next }
     /^\[/                  { f = 0 }
-    f && /agent_panel_sort[[:space:]]*=[[:space:]]*"priority"/ { found = 1 }
+    f && /^[[:space:]]*agent_panel_sort[[:space:]]*=[[:space:]]*"priority"/ { found = 1 }
     END { print (found ? "yes" : "no") }
   ' "$1"
+}
+
+# TOML として実際にパースして意味を検証する。テキスト近似では
+# ui.agent_panel_sort = "..." が ui.ui.agent_panel_sort に化ける失敗モード
+# （パースは通るので気づけない）を捕まえられない。python3 は既に必須依存
+toml_ok() {
+  python3 - "$1" <<'PY' 2>&1
+import sys, tomllib
+try:
+    d = tomllib.load(open(sys.argv[1], "rb"))
+except Exception as e:
+    print(f"parse-error: {e}")
+    sys.exit(0)
+ui = d.get("ui", {})
+if not isinstance(ui, dict):
+    print("ui-not-table"); sys.exit(0)
+if ui.get("agent_panel_sort") != "priority":
+    print(f"sort={ui.get('agent_panel_sort')!r}"); sys.exit(0)
+if "ui" in ui:
+    print("ui.ui が出来ている（dotted key の誤り）"); sys.exit(0)
+agents = ui.get("sidebar", {}).get("agents", {})
+if agents.get("row_gap") != 0:
+    print(f"row_gap={agents.get('row_gap')!r}"); sys.exit(0)
+rows = agents.get("rows_by_agent", {}).get("claude")
+if not rows:
+    print("rows_by_agent.claude が無い"); sys.exit(0)
+flat = [t for row in rows for t in row]
+toks = [t["token"] for t in flat if isinstance(t, dict) and "token" in t]
+if "$reason" not in toks:
+    print(f"$reason が無い: {toks}"); sys.exit(0)
+print("ok")
+PY
 }
 
 # --- ケース 1: 既存環境（[ui] あり、superset フックあり） --------------------
@@ -98,6 +129,9 @@ assert_eq "1" "$c" "config のマーカーブロックは 1 組"
 assert_eq "yes" "$(sort_in_ui "$root/.config/herdr/config.toml")" \
   "agent_panel_sort が既存 [ui] セクション内に入る"
 
+assert_eq "ok" "$(toml_ok "$root/.config/herdr/config.toml")" \
+  'TOML としてパースでき agent_panel_sort と $reason が正しい位置に入る'
+
 # 行頭のキーだけ数える。agents-rows.toml のコメントも agent_panel_sort に
 # 言及しているので、素の grep だとそれらを拾ってしまう
 c="$(grep -cE '^[[:space:]]*agent_panel_sort[[:space:]]*=' "$root/.config/herdr/config.toml")"
@@ -138,6 +172,9 @@ HERDR_JUMP_PREFIX="$root2" bash "$INSTALL" >/dev/null 2>&1
 assert_eq "yes" "$(sort_in_ui "$root2/.config/herdr/config.toml")" \
   "[ui] が無い config でも agent_panel_sort が入る"
 
+assert_eq "ok" "$(toml_ok "$root2/.config/herdr/config.toml")" \
+  "[ui] 無し経路でも TOML として正しい"
+
 r2run1="$(cat "$root2/.config/herdr/config.toml")"
 
 HERDR_JUMP_PREFIX="$root2" bash "$INSTALL" >/dev/null 2>&1
@@ -164,11 +201,18 @@ rm -rf "$root2"
 
 # --- ケース 3: 何も無い環境（settings.json / hooks.json が不在） -------------
 
+# ディレクトリも作らない。install.sh が mkdir -p する経路を通す
 root3="$(mktemp -d)"
-mkdir -p "$root3/.claude" "$root3/.config/herdr" "$root3/.codex" "$root3/.local/bin"
 
 HERDR_JUMP_PREFIX="$root3" bash "$INSTALL" >/dev/null 2>&1
-assert_eq "0" "$?" "空の環境でも install.sh は成功する"
+assert_eq "0" "$?" "ディレクトリごと無い環境でも install.sh は成功する"
+
+assert_eq "yes" "$( [ -f "$root3/.claude/settings.json" ] && echo yes || echo no )" \
+  "settings.json の親ディレクトリごと作る"
+assert_eq "yes" "$( [ -f "$root3/.codex/hooks.json" ] && echo yes || echo no )" \
+  "codex hooks.json の親ディレクトリごと作る"
+assert_eq "ok" "$(toml_ok "$root3/.config/herdr/config.toml")" \
+  "config.toml も親ディレクトリごと作られ TOML として正しい"
 
 evs="$(jq -r '.hooks | keys[]' "$root3/.claude/settings.json" 2>/dev/null | sort | tr '\n' ' ')"
 assert_eq "PermissionRequest PostToolBatch PreToolUse Stop " "$evs" \

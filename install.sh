@@ -33,17 +33,16 @@ CODEXHOOKS="$PREFIX/.codex/hooks.json"
 command -v jq      >/dev/null 2>&1 || { echo "jq が必要です" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 が必要です" >&2; exit 1; }
 
-# 一時ファイルは必ず片付ける。変換コマンドが失敗すると mv まで届かないので、
-# trap を張らないと壊れた入力に対して繰り返し実行するたび溜まっていく
-TMPFILES=()
-mktmp() {
-  local t
-  t="$(mktemp)" || return 1
-  TMPFILES+=("$t")
-  printf '%s' "$t"
-}
-cleanup() { [ "${#TMPFILES[@]}" -gt 0 ] && rm -f "${TMPFILES[@]}"; return 0; }
+# 一時ファイルは作業ディレクトリ 1 つにまとめ、trap でまるごと消す。
+# 個別に配列へ追記する方式は使えない —— tmp="$(mktmp)" のコマンド置換は
+# サブシェルで走るので、関数内での配列追記が親プロセスに伝わらず、
+# 変換の失敗経路（mv に届かない）で毎回 1 個ずつ漏れる。
+WORKDIR="$(mktemp -d)" || { echo "一時ディレクトリを作れません" >&2; exit 1; }
+cleanup() { rm -rf "$WORKDIR"; }
 trap cleanup EXIT
+
+# tmpfor <対象ファイル> <用途> : WORKDIR の中に衝突しない一時パスを返す
+tmpfor() { printf '%s/%s.%s' "$WORKDIR" "$(basename "$1")" "$2"; }
 
 backup() { [ -f "$1" ] && cp -p "$1" "$1.bak.$STAMP"; return 0; }
 
@@ -54,17 +53,20 @@ backup() { [ -f "$1" ] && cp -p "$1" "$1.bak.$STAMP"; return 0; }
 
 wire_hook_events() {
   local f="$1"
-  [ -f "$f" ] || echo '{}' > "$f"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  [ -f "$f" ] || echo '{}' > "$f" || return 1
   backup "$f"
 
-  local tmp; tmp="$(mktmp)"
+  local tmp; tmp="$(tmpfor "$f" json)"
   jq \
     --arg set   "bash '$HOOK' set" \
     --arg clear "bash '$HOOK' clear" '
-    # 既存の herdr-jump エントリを取り除く。他人のフックには触らない
+    # 既存の herdr-jump エントリを取り除く。他人のフックには触らない。
+    # .hooks が無い / null のグループがあっても落ちないよう (. // []) で守る
+    # （落ちると jq が非ゼロで終わり、配線がまるごと黙って飛ぶ）
     def purge:
       (. // [])
-      | map(.hooks |= map(select(((.command // "") | contains("herdr-jump-reason")) | not)))
+      | map(.hooks |= ((. // []) | map(select(((.command // "") | contains("herdr-jump-reason")) | not))))
       | map(select((.hooks | length) > 0));
 
     def entry($matcher; $cmd):
@@ -83,18 +85,20 @@ wire_hook_events() {
 
 wire_herdr_config() {
   local f="$1"
-  [ -f "$f" ] || : > "$f"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  [ -f "$f" ] || : > "$f" || return 1
   backup "$f"
 
   local tmp t2
-  tmp="$(mktmp)"
+  tmp="$(tmpfor "$f" toml)"
+  t2="$(tmpfor "$f" toml2)"
 
   # 既存のマーカーブロックを落とす
   awk '
     /^# >>> herdr-jump \(managed\) >>>/ { skip = 1 }
     skip != 1 { print }
     /^# <<< herdr-jump \(managed\) <<</ { skip = 0 }
-  ' "$f" > "$tmp"
+  ' "$f" > "$tmp" || return 1
 
   # agent_panel_sort は [ui] テーブルのキーなので、末尾に追記される
   # マーカーブロックの中には書けない（config/agents-rows.toml の冒頭コメント参照）。
@@ -102,12 +106,10 @@ wire_herdr_config() {
   local need_ui=0
   if grep -qE '^[[:space:]]*agent_panel_sort[[:space:]]*=' "$tmp"; then
     # 1) 既にある（前回の実行か、利用者が自分で書いた）→ 値を揃える
-    t2="$(mktmp)"
     sed -E 's|^([[:space:]]*)agent_panel_sort[[:space:]]*=.*|\1agent_panel_sort = "priority"  # herdr-jump|' \
       "$tmp" > "$t2" && mv "$t2" "$tmp"
   elif grep -qE '^\[ui\][[:space:]]*$' "$tmp"; then
     # 2) [ui] がある → その直後に挿入
-    t2="$(mktmp)"
     awk '
       { print }
       /^\[ui\][[:space:]]*$/ && !inserted {
@@ -123,14 +125,13 @@ wire_herdr_config() {
   # 末尾の空行をいったん全部落としてから、区切りの空行を 1 つだけ置く。
   # 無条件に足すと実行ごとに空行が 1 つ増えて冪等でなくなる。逆に空行が
   # 無いと直前の行にマーカーコメントがくっついて TOML が壊れる
-  t2="$(mktmp)"
   awk '{ buf[NR] = $0 }
        END { last = NR
              while (last > 0 && buf[last] == "") last--
-             for (i = 1; i <= last; i++) print buf[i] }' "$tmp" > "$t2"
+             for (i = 1; i <= last; i++) print buf[i] }' "$tmp" > "$t2" || return 1
   mv "$t2" "$tmp"
   printf '\n' >> "$tmp"
-  cat "$ROWS" >> "$tmp"
+  cat "$ROWS" >> "$tmp" || return 1
 
   # [ui.sidebar.agents] を先に書いてから [ui] を明示定義するのは TOML で許される
   # （暗黙テーブルの後付け定義）。実測で確認済み
@@ -145,14 +146,17 @@ wire_herdr_config() {
 
 wire_ccstatus() {
   local f="$1"
+  # ここは他と違ってファイルを新規作成しない。ccstatus は利用者の statusLine
+  # スクリプトなので、無い環境では配線する相手がいない。
+  # return 1 にして呼び出し側の "ok:" を出させない（skip と ok が並ぶと嘘になる）
   if [ ! -f "$f" ]; then
     echo "  skip: $f が見つかりません（statusLine を使っていない環境）" >&2
-    return 0
+    return 1
   fi
   grep -q 'herdr-usage-push' "$f" && return 0
   backup "$f"
 
-  local tmp; tmp="$(mktmp)"
+  local tmp; tmp="$(tmpfor "$f" sh)"
   # input=$(cat) の直後に差し込む。awk は行ごとに全ルールを評価するので、
   # 実際には先に現れるこちらが勝つ。$input が定義された直後で、crmux 行の
   # 有無に関係なく同じ位置に入るためこの方が安定する。
@@ -167,7 +171,7 @@ wire_ccstatus() {
       printf "echo \"$input\" | %s &  # herdr-jump\n", push
       inserted = 1
     }
-  ' "$f" > "$tmp" || return 0
+  ' "$f" > "$tmp" || return 1
 
   # 挿入位置が見つからなければ awk は入力をそのまま出す。黙って ok を出さず、
   # 手で足す方法を示す
@@ -178,7 +182,7 @@ wire_ccstatus() {
         次の 1 行を \$input を組み立てた後に手で足してください:
           echo "\$input" | $PUSH &
 WARN
-    return 0
+    return 1
   fi
 
   mv "$tmp" "$f"

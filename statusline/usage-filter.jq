@@ -19,5 +19,6 @@ def limits:
   | if length == 0 then null else join(" | ") end;
 
 [ (pct    | if . == null then "" else "\(.)%" end),
-  (limits | if . == null then "" else . end) ]
+  (limits | if . == null then "" else . end),
+  (.model.display_name // "") ]
 | @tsv
