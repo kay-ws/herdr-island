@@ -72,5 +72,17 @@ assert_eq "0" "$?" "ガードで抜ける時も exit 0"
 # reason が空になる payload では herdr を呼ばない（壊れた JSON も同様）
 assert_eq "" "$(run_hook set 'this is not json')" "壊れた JSON では何も送らない"
 
+# 型不正な payload ではフィルタ側の jq が exit 5 で落ちる
+# （"Cannot index string with string"）。フィルタは直さず、この層の
+# 2>/dev/null + 空チェックで握り潰されることを固定する
+assert_eq "" "$(run_hook set '{"tool_name":"Bash","tool_input":"oops"}')" \
+  "tool_input の型が不正でも何も送らない"
+
+printf '{"tool_name":"Bash","tool_input":"oops"}' | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" set >/dev/null 2>&1
+assert_eq "0" "$?" "tool_input の型が不正でも exit 0"
+
+assert_eq "" "$(run_hook set '{"tool_name":"AskUserQuestion","tool_input":{"questions":{"a":1}}}')" \
+  "questions の型が不正でも何も送らない"
+
 teardown_fake_herdr
 finish

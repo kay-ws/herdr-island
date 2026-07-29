@@ -35,6 +35,10 @@ assert_eq "WebFetch" \
   "$(reason '{"tool_name":"WebFetch","tool_input":{}}')" \
   "未知 tool は名前だけ"
 
+assert_eq "Edit" \
+  "$(reason '{"tool_name":"Edit","tool_input":{"file_path":"/a/b/"}}')" \
+  "file_path が / 終わりでも落ちず見出しのみになる"
+
 assert_eq "Bash" \
   "$(reason '{"tool_name":"Bash","tool_input":{}}')" \
   "tool_input が空でも落ちない"
