@@ -1,6 +1,12 @@
 # >>> herdr-jump (managed) >>>
 # このブロックは install.sh が管理する。手で編集すると次回の実行で失われる。
 #
+# カスタムトークンは $ で始めること。$ を付けないと herdr が
+#   invalid ui config: unknown sidebar token `reason`;
+#   custom tokens must start with `$` ; keeping current ui settings
+# を返し、この [ui] 設定が丸ごと拒否される（他の行も一切効かなくなる）。
+# built-in セグメント（state_icon / workspace / tab / agent など）は $ 無し。
+#
 # agent_panel_sort はここに書けない。あれは [ui] テーブルのキーであり、
 # このブロックは config.toml の末尾に追記されるため:
 #   * ブロック内で [ui] を定義すると、既に [ui] を持つ config で
@@ -17,11 +23,11 @@ rows = [["state_icon", "workspace", "tab"], ["agent"]]
 [ui.sidebar.agents.rows_by_agent]
 claude = [
   ["state_icon", "workspace", "tab"],
-  [{ token = "reason", fg = "#f38ba8", bold = true }],
-  [{ token = "ctx", fg = "#89b4fa" }, { token = "limits", dim = true }],
+  [{ token = "$reason", fg = "#f38ba8", bold = true }],
+  [{ token = "$ctx", fg = "#89b4fa" }, { token = "$limits", dim = true }],
 ]
 codex = [
   ["state_icon", "workspace", "tab"],
-  [{ token = "reason", fg = "#f9e2af", bold = true }],
+  [{ token = "$reason", fg = "#f9e2af", bold = true }],
 ]
 # <<< herdr-jump (managed) <<<

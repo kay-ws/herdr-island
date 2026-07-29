@@ -138,14 +138,17 @@ wire_ccstatus() {
   backup "$f"
 
   local tmp; tmp="$(mktemp)"
-  # crmux 行の直後に差し込む。無ければ input=$(cat) の直後
+  # input=$(cat) の直後に差し込む。awk は行ごとに全ルールを評価するので、
+  # 実際には先に現れるこちらが勝つ。$input が定義された直後で、crmux 行の
+  # 有無に関係なく同じ位置に入るためこの方が安定する。
+  # crmux ルールは input=$(cat) の形が違う ccstatus 向けのフォールバック
   awk -v push="$PUSH" '
     { print }
-    !inserted && /crmux rpc status-update/ {
+    !inserted && /^input=\$\(cat\)/ {
       printf "echo \"$input\" | %s &  # herdr-jump\n", push
       inserted = 1
     }
-    !inserted && /^input=\$\(cat\)/ {
+    !inserted && /crmux rpc status-update/ {
       printf "echo \"$input\" | %s &  # herdr-jump\n", push
       inserted = 1
     }
@@ -163,12 +166,24 @@ wire_herdr_config  "$HERDRCFG"   && echo "  ok: $HERDRCFG"
 wire_ccstatus      "$CCSTATUS"   && echo "  ok: $CCSTATUS"
 wire_hook_events   "$CODEXHOOKS" && echo "  ok: $CODEXHOOKS"
 
+# v1 の名残を知らせる。消すのは越権なので警告だけ出す
+if [ -f "$HERDRCFG" ] && grep -q 'herdr-jump\.sh' "$HERDRCFG"; then
+  cat <<'WARN'
+
+注意: config.toml に herdr-jump.sh を参照するキーバインドが残っています。
+      v1 のペイン切り替え UI は撤去したのでこのバインドは動きません。
+      [[keys.command]] の該当ブロックを手で消してください。
+      (他人の keys 設定を install.sh が消すのは越権なので警告だけ出します)
+WARN
+fi
+
 cat <<'NOTE'
 
 完了しました。
 
   * Claude Code は次のセッションから有効になります
-  * herdr は設定の再読み込みが要ります (herdr config reload / 再起動)
+  * herdr は設定の再読み込みが要ります: herdr server reload-config
+    (restart は使わないこと。herdr のペインの中から叩くと自分ごと落ちる)
   * Codex は次回起動時にフックの承認プロンプトが 1 回出ます。
     trusted_hash は自動登録できないため、そこで許可してください
 
