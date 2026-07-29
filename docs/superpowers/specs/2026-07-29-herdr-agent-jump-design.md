@@ -40,6 +40,8 @@ C) agent focus w0:p1            : focused = w0:p1    ← ID 指定で戻った
 
 素のシェルペインに対しては `{"error":{"code":"agent_not_found"}}`。`agent wait` と同じゲート。飛び先はエージェントに限られる。
 
+このときの終了コードは **1**。`herdr` はエラーを JSON で出しつつ非ゼロで終わるので、エラー判定に `.error` を JSON パースする必要はなく `if ! herdr ...` で足りる。
+
 ### `pane current` はフォーカス位置を返さない
 
 `pane current` が返すのは「その CLI 呼び出しが走っているペイン」であって、フォーカスされているペインではない。フォーカスの観測には **`pane list` の各要素の `focused` フラグ**を使うこと。
@@ -139,7 +141,9 @@ Herdr のプラグイン機構（`herdr-plugin.toml` の `[[panes]] placement = 
 ○ claude  w1:t4  (idle)
 ```
 
-列は 状態アイコン / `agent` / `workspace_id:tab_id` / `terminal_title_stripped`。
+列は 状態アイコン / `agent` / `tab_id` / `terminal_title_stripped`。
+
+`tab_id` は `"w0:t1"` の形で workspace prefix を既に含む（実測確認済み）。`workspace_id` と連結すると `w0:w0:t1` になるので連結しない。
 
 状態アイコンの対応は以下で固定する。
 
