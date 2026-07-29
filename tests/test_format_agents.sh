@@ -49,4 +49,36 @@ assert_eq "w0:p4 w0:p3 w0:p2 w0:p9 " "$order" "並び順: 要対応(seq降順) �
 icons=$(fixture_sort | format_agents "" | sed 's/ .*//' | tr '\n' ' ')
 assert_eq "◍ ● ◐ ○ " "$icons" "アイコン: done / blocked / working / idle"
 
+# --- タイトル空・キー欠落・未知の status ---
+fixture_edge() {
+  cat <<'JSON'
+{"result":{"agents":[
+ {"pane_id":"w0:p1","tab_id":"w0:t1","agent":"claude","agent_status":"idle","state_change_seq":10,"terminal_title_stripped":""},
+ {"pane_id":"w0:p2","tab_id":"w0:t2","agent":"claude","agent_status":"quantum","state_change_seq":20,"terminal_title_stripped":"未知状態"},
+ {"pane_id":"w0:p3","tab_id":"w0:t3","agent":"codex","agent_status":"idle","state_change_seq":5}
+]}}
+JSON
+}
+
+edge=$(fixture_edge | format_agents "")
+assert_contains "$edge" "(idle)"$'\t'"w0:p1" "タイトルが空なら (状態) を出す"
+assert_contains "$edge" "(idle)"$'\t'"w0:p3" "キーごと無い場合も (状態) を出す"
+assert_contains "$edge" "· claude"          "未知の status は · で出す（隠さない）"
+assert_eq 3 "$(printf '%s\n' "$edge" | grep -c .)" "3 件すべて残る"
+
+# --- 0 件 ---
+empty=$(echo '{"result":{"agents":[]}}' | format_agents "")
+assert_eq "" "$empty" "エージェント 0 件なら空出力"
+
+# --- 自分しかいない ---
+fixture_only_self() {
+  cat <<'JSON'
+{"result":{"agents":[
+ {"pane_id":"w0:p1","tab_id":"w0:t1","agent":"claude","agent_status":"idle","state_change_seq":1,"terminal_title_stripped":"x"}
+]}}
+JSON
+}
+only_self=$(fixture_only_self | format_agents "w0:p1")
+assert_eq "" "$only_self" "自分だけなら空出力"
+
 finish
