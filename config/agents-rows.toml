@@ -20,19 +20,21 @@
 row_gap = 0
 rows = [["state_icon", "workspace", "tab"], ["agent"]]
 
-# state_text（idle / working など）を reason と同じ行に置く。reason は
-# 止まっている間しか値が入らないので、空のときに行が寂しくならない
+# state_text は 1 行目の state_icon の隣に置く。reason と同じ行にすると
+# "blocked · " の 10 セル分が先に幅を食い、reason が早く truncate される
+# （実測: パネル幅で reason は 16 文字程度しか残らなかった）。
+# herdr は溢れた分を … で切るので壊れはしないが、情報量が落ちる。
 [ui.sidebar.agents.rows_by_agent]
 claude = [
-  ["state_icon", "workspace", "tab"],
+  ["state_icon", "workspace", "tab", "state_text"],
   ["agent", { token = "$model", dim = true }],
-  ["state_text", { token = "$reason", fg = "#f38ba8", bold = true }],
+  [{ token = "$reason", fg = "#f38ba8", bold = true }],
   [{ token = "$ctx", fg = "#89b4fa" }, { token = "$limits", dim = true }],
 ]
 codex = [
-  ["state_icon", "workspace", "tab"],
+  ["state_icon", "workspace", "tab", "state_text"],
   ["agent", { token = "$model", dim = true }],
-  ["state_text", { token = "$reason", fg = "#f9e2af", bold = true }],
+  [{ token = "$reason", fg = "#f9e2af", bold = true }],
   [{ token = "$ctx", fg = "#89b4fa" }],
 ]
 # <<< herdr-jump (managed) <<<
