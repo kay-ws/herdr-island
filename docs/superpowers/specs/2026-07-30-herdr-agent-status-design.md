@@ -406,10 +406,172 @@ usage 側も同様に、statusLine の stdin JSON サンプルから `$ctx` / `$
 6. `install.sh` を2回連続で実行し、settings.json / config.toml / ccstatus が
    重複エントリを持たないこと
 
-## 11. 未解決 / 実装時に決めること
+## 11. 実装時に判明して設計を変えた点
 
-- `Elicitation` イベントの実 payload を未確認。フィールド名（`message` / `mcp_server_name`）は
-  リファレンス記載どおりの想定だが、実物を見ていない。**取れなければ MCP 対応だけ落とす**
-  （許可待ち・質問待ちは独立して動く）
-- 40文字が実際の Agents パネル幅に対して適切かは実機で見て調整する
-- herdr 側がトークンを自動 truncate するのか、はみ出すのかは未確認
+実装後に追記。**以下は本文（第1〜10節）の記述を上書きする。**
+
+### 11.1 herdr CLI は使えない → socket API 直叩き
+
+第5.5節は `herdr pane report-metadata` を送信手段としていたが、**herdr 0.7.5 の
+この CLI は `--source` に値を渡せない**。13 パターン試した結果:
+
+| 渡し方 | 結果 |
+|---|---|
+| `--source hj` | `unknown option: hj` |
+| `--source=hj` | 認識されず → `missing required --source` |
+| `--source 1`（数値） | `unknown option: 1` |
+| 位置引数 `w0:p1` | `unknown option: w0:p1`（常に拒否） |
+| `-- w0:p1` | `unknown option: --` |
+| `--token reason=X` | **通る**（スペース形式） |
+| `--seq T` | **通る**（`--seq=T` は拒否） |
+
+help は `Usage: ... [OPTIONS] --source <ID> <PANE_ID>` と書いているが実装が伴っていない。
+rtk バイパス・`env -i` の最小環境でも同じで、環境要因ではない。
+
+**socket API なら動く**（実測で `{"result":{"type":"ok"}}`）:
+
+```
+method: pane.report_metadata
+params 必須: pane_id, source
+params 任意: tokens(object) / seq(int) / ttl_ms(int) / agent / title /
+             display_agent / state_labels / applies_to_source /
+             clear_title / clear_display_agent / clear_state_labels
+socket: $HERDR_SOCKET_PATH
+```
+
+- **クリアは `tokens: {reason: null}`**（実測: snapshot の `tokens` が `null` になる）。
+  `clear_token` に相当するパラメータは RPC に無い —— title / display_agent /
+  state_labels には専用フラグがあるのに token には無いので、null を入れるのが設計上の手段
+- トークンの格納先は `snapshot.panes[].tokens.<name>` と `snapshot.agents[].tokens.<name>`。
+  `herdr api snapshot` で検証できるので、**パネルの見え方と切り離して切り分けられる**
+- herdr 公式フック `herdr-agent-state.sh` も CLI を使わず socket 直叩き（python3）。
+  つまりこれが herdr の想定経路で、CLI を選んだ本設計が筋悪だった
+
+**依存が変わる。** 第4節の「依存は `jq` と `herdr` CLI のみ」→ **`jq` と `python3`**。
+送信手段は `nc -U -N` でも動いたが python3 を選んだ（kay の判断）。理由は公式フックと
+同じ経路であること、netcat は実装が3系統あって `-U` / `-N` の可否が環境で変わること。
+
+副産物としてテストが単純になった。JSON を送るので値の空白や `|` はそのまま 1
+フィールドとして届き、**シェル引数のクォート漏れという失敗モードが構造的に消える**。
+偽 socket サーバ（`tests/fake_socket.sh`）が受信 JSON をそのまま検証する。
+
+### 11.2 カスタムトークンは `$` 接頭辞が必須
+
+第7節の `{ token = "reason", ... }` は誤り。正しくは `{ token = "$reason", ... }`。
+
+```
+invalid ui config: unknown sidebar token `reason`;
+custom tokens must start with `$` ; keeping current ui settings
+```
+
+**`$` を忘れると `[ui]` 設定が丸ごと拒否される**（"keeping current ui settings"）ので、
+`row_gap` も `rows` も一切効かなくなる。built-in セグメント（`state_icon` /
+`workspace` / `tab` / `agent`）は `$` 無し。
+
+### 11.3 `agent_panel_sort` はマーカーブロックに書けない
+
+第7節・第8.2節はブロック内に `agent_panel_sort = "priority"` を書く形だったが、
+これは末尾追記されるブロックでは不可能:
+
+- ブロック内で `[ui]` を定義すると既存 `[ui]` と衝突して `Cannot declare ('ui',) twice`
+- `ui.agent_panel_sort = "..."` と書くと直前のテーブル内のキーと解釈され
+  `ui.ui.agent_panel_sort` になる。**パースは通るので気づけない**
+
+install.sh が3経路で `[ui]` へ入れる形にした（既存キーの置換 / `[ui]` 直後への挿入 /
+`[ui]` が無ければブロックの後に `[ui]` を作る）。`[ui.sidebar.agents]` を先に書いてから
+`[ui]` を後付け定義するのは TOML で許されることを実測で確認済み。
+
+### 11.4 `tokens` はキー単位でマージされる（配管を分ける前提）
+
+第4節は reason と usage を「独立した2本の配管」としたが、**両方が同じ `tokens`
+オブジェクトに書く**ので、herdr が置換方式なら毎ターン走る usage push が reason を
+消し続けて機能が成立しない。設計時にこれを確認していなかった。
+
+実測ではキー単位のマージだった:
+
+```
+1) reason を送る    → {"ctx":"34%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+2) usage push       → {"ctx":"35%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+3) usage push 2回目 → {"ctx":"36%", "limits":"5h 6% | 7d 13%", "reason":"Bash: Remove node_modules"}
+```
+
+`ctx` は更新され `reason` は残る。クリアも `tokens: {reason: null}` で reason だけが
+消え `ctx` は残る。したがって配管の独立性はこのマージ挙動に依存している。
+**herdr 側の実装に依存する前提なので、herdr の更新時に再確認すべき項目。**
+偽 socket サーバは受信 JSON を記録するだけなのでテストでは固定できない。
+
+### 11.5 Codex 側も実機で動いた（未検証だった前提の解消）
+
+Codex の共通フック入力に `.model` は**存在する**。値はモデル slug がそのまま入る。
+
+```
+pane=w0:p1 claude → {"ctx": "45%", "limits": "5h 24% | 7d 15%", "model": "Opus 5 (1M context)"}
+pane=w0:p8 codex  → {"ctx": "29%", "model": "gpt-5.6-sol"}
+```
+
+Codex 側の実装は Codex 自身に委譲した。`hooks/herdr-codex-usage.sh` が
+セッション JSONL の `last_token_usage` を読んで `$ctx` を送り、reason フックの
+`model` モードが SessionStart で `$model` を 1 回送る。`$limits` は Codex に
+rate_limits が無いので入れていない。
+
+`trusted_hash` の承認プロンプトは 1 回通す必要があった（第8.4節の想定どおり）。
+
+**レビューで見つけた配線バグ**: `install.sh` の `wire_hook_events` が jq を 2 段構成に
+していたため、2 段目の `purge` が 1 段目で入れた clear エントリを巻き込んで消していた。
+
+```
+Stop -> ["herdr-codex-usage.sh'"]     ← reason の clear が消えている
+```
+
+Codex で拒否・中断したときに reason が TTL まで残る状態だった。jq を 1 回に統合して
+解決。Stop に clear と usage の両方が入ることをテストで固定した。
+**冪等性のための purge が、同じ関数内の前の段を「他人の残骸」と見なす**という
+形の欠陥で、段を分けた時点で入り込む。
+
+### 11.6 表示幅は herdr が切る（40 文字を下げない理由）
+
+実機で 40 文字ちょうどの reason を送った結果:
+
+```
+blocked · Bash: 012345678901234…
+```
+
+herdr がパネル幅で `…` に切るので**壊れない**。ただし `state_text` を同じ行に
+置いていたため `blocked · ` の 10 セルと `Bash: ` の 6 セルが先に幅を食い、
+reason は 16 文字程度しか残らなかった。`state_text` を 1 行目へ移して reason を
+単独行にした。
+
+`trunc(40)` は下げていない。herdr が切るので二重に切る意味が無く、サイドバーを
+広げれば 40 文字全部見える。**切る判断は表示側の仕事**で、送る側が表示幅を
+先読みして削るのは越権。
+
+### 11.7 手で送った reason は目視確認できない
+
+clear が 3 経路（`PostToolBatch` / `Stop` / TTL）あるため、開発中に手で reason を
+送っても**送った手段が終わった瞬間に消える** —— Bash で送れば その Bash の終了で
+`PostToolBatch` が clear を走らせる。「一瞬見えて消える」現象の正体。
+
+値が入ったことの確認は `herdr api snapshot`。目視したい場合は
+`~/.claude/settings.json` から `PostToolBatch` と `Stop` の herdr-jump エントリを
+一時的に外し、確認後 `./install.sh` で戻す。
+
+**保険を厚くする設計が観測しやすさと正面から衝突する**例。運用としては 3 経路が
+正しいが、検証手順を文書に書いておかないと自分でも故障と誤診する（実際に 3 回誤診した）。
+
+### 11.8 その他
+
+- 設定リロードは `herdr server reload-config`（`herdr config reload` は存在しない）
+- `tests/run.sh` は nullglob が無く、テスト 0 件のとき glob がリテラルのまま bash に
+  渡って誤爆していた。Task 1 で修正
+- `label` は jq の予約語（`label $out | break`）なので関数名に使えない。`heading` にした
+
+## 12. 未解決 / 実装時に決めること
+
+- `Elicitation` イベントの実 payload を未確認。`reason-filter.jq` は扱えるが
+  `install.sh` は**意図的に配線していない**。payload を確認できたら 1 エントリ足すだけ。
+  許可待ち・質問待ちはこれと独立に動くので未配線でも機能は完結している
+- **auto mode では許可プロンプトがほぼ出ない。** 常用環境で実際に効くのは
+  `AskUserQuestion` の経路（実機で `blocked · 質問: 次の作業` を確認済み）。
+  `PermissionRequest` の自動発火そのものは未検証のまま
+- **拒否時に `PostToolBatch` が発火するかは未確認。** `Stop` フックが取りこぼしを
+  回収する設計なので、どちらでも reason は消えるはず

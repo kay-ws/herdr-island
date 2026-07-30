@@ -24,15 +24,6 @@ assert_contains() {
   fi
 }
 
-assert_exit_nonzero() {
-  local cmd="$1" msg="${2:-nonzero}"
-  if "$@" >/dev/null 2>&1; then
-    printf 'FAIL %s  (expected non-zero exit)\n' "$msg" >&2
-    _fail=1
-  else
-    printf 'ok   %s\n' "$msg"
-  fi
-}
 
 finish() {
   if [[ $_fail -eq 0 ]]; then echo "ALL PASS"; exit 0; else echo "FAILURES"; exit 1; fi
