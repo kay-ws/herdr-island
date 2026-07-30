@@ -500,7 +500,65 @@ install.sh が3経路で `[ui]` へ入れる形にした（既存キーの置換
 **herdr 側の実装に依存する前提なので、herdr の更新時に再確認すべき項目。**
 偽 socket サーバは受信 JSON を記録するだけなのでテストでは固定できない。
 
-### 11.5 その他
+### 11.5 Codex 側も実機で動いた（未検証だった前提の解消）
+
+Codex の共通フック入力に `.model` は**存在する**。値はモデル slug がそのまま入る。
+
+```
+pane=w0:p1 claude → {"ctx": "45%", "limits": "5h 24% | 7d 15%", "model": "Opus 5 (1M context)"}
+pane=w0:p8 codex  → {"ctx": "29%", "model": "gpt-5.6-sol"}
+```
+
+Codex 側の実装は Codex 自身に委譲した。`hooks/herdr-codex-usage.sh` が
+セッション JSONL の `last_token_usage` を読んで `$ctx` を送り、reason フックの
+`model` モードが SessionStart で `$model` を 1 回送る。`$limits` は Codex に
+rate_limits が無いので入れていない。
+
+`trusted_hash` の承認プロンプトは 1 回通す必要があった（第8.4節の想定どおり）。
+
+**レビューで見つけた配線バグ**: `install.sh` の `wire_hook_events` が jq を 2 段構成に
+していたため、2 段目の `purge` が 1 段目で入れた clear エントリを巻き込んで消していた。
+
+```
+Stop -> ["herdr-codex-usage.sh'"]     ← reason の clear が消えている
+```
+
+Codex で拒否・中断したときに reason が TTL まで残る状態だった。jq を 1 回に統合して
+解決。Stop に clear と usage の両方が入ることをテストで固定した。
+**冪等性のための purge が、同じ関数内の前の段を「他人の残骸」と見なす**という
+形の欠陥で、段を分けた時点で入り込む。
+
+### 11.6 表示幅は herdr が切る（40 文字を下げない理由）
+
+実機で 40 文字ちょうどの reason を送った結果:
+
+```
+blocked · Bash: 012345678901234…
+```
+
+herdr がパネル幅で `…` に切るので**壊れない**。ただし `state_text` を同じ行に
+置いていたため `blocked · ` の 10 セルと `Bash: ` の 6 セルが先に幅を食い、
+reason は 16 文字程度しか残らなかった。`state_text` を 1 行目へ移して reason を
+単独行にした。
+
+`trunc(40)` は下げていない。herdr が切るので二重に切る意味が無く、サイドバーを
+広げれば 40 文字全部見える。**切る判断は表示側の仕事**で、送る側が表示幅を
+先読みして削るのは越権。
+
+### 11.7 手で送った reason は目視確認できない
+
+clear が 3 経路（`PostToolBatch` / `Stop` / TTL）あるため、開発中に手で reason を
+送っても**送った手段が終わった瞬間に消える** —— Bash で送れば その Bash の終了で
+`PostToolBatch` が clear を走らせる。「一瞬見えて消える」現象の正体。
+
+値が入ったことの確認は `herdr api snapshot`。目視したい場合は
+`~/.claude/settings.json` から `PostToolBatch` と `Stop` の herdr-jump エントリを
+一時的に外し、確認後 `./install.sh` で戻す。
+
+**保険を厚くする設計が観測しやすさと正面から衝突する**例。運用としては 3 経路が
+正しいが、検証手順を文書に書いておかないと自分でも故障と誤診する（実際に 3 回誤診した）。
+
+### 11.8 その他
 
 - 設定リロードは `herdr server reload-config`（`herdr config reload` は存在しない）
 - `tests/run.sh` は nullglob が無く、テスト 0 件のとき glob がリテラルのまま bash に
@@ -512,11 +570,8 @@ install.sh が3経路で `[ui]` へ入れる形にした（既存キーの置換
 - `Elicitation` イベントの実 payload を未確認。`reason-filter.jq` は扱えるが
   `install.sh` は**意図的に配線していない**。payload を確認できたら 1 エントリ足すだけ。
   許可待ち・質問待ちはこれと独立に動くので未配線でも機能は完結している
-- 40文字が実際の Agents パネル幅に対して適切かは実機で見て調整する（未確認）
-- herdr 側がトークンを自動 truncate するのか、はみ出すのかは未確認
-- **許可プロンプトでの自動発火は未検証。** フック本体を手で叩いた検証は済んでいる
-  （`tokens` に値が入ることを snapshot で確認）が、`settings.json` の配線経由で
-  実際に `PermissionRequest` が飛ぶかは次セッション以降でしか見られない
-  （Claude Code はフック設定を起動時に読む）
+- **auto mode では許可プロンプトがほぼ出ない。** 常用環境で実際に効くのは
+  `AskUserQuestion` の経路（実機で `blocked · 質問: 次の作業` を確認済み）。
+  `PermissionRequest` の自動発火そのものは未検証のまま
 - **拒否時に `PostToolBatch` が発火するかは未確認。** `Stop` フックが取りこぼしを
   回収する設計なので、どちらでも reason は消えるはず
