@@ -77,4 +77,37 @@ python3 "$R" remove "$WORK/mine.toml" > "$WORK/mine.out"
 assert_eq "10" "$?" "完全一致しない \$reason 行は rc=10 で残す"
 assert_contains "$(cat "$WORK/mine.out")" '#ffffff' "利用者の行はそのまま残る"
 
+# --- I1: 別テーブルの rows を掴まないこと ---
+# ファイル内の最初の `rows =` を拾う実装だと、先に別テーブルがある config で
+# そちらへ挿入してしまう。TOML として妥当なので config check は通り、
+# doctor もファイル全体を grep するので「あり」と報告する = 全診断が正常と言う誤り
+cat > "$WORK/other.toml" <<'EOF'
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace"]]
+
+[ui.sidebar.agents]
+rows = [["agent"]]
+EOF
+python3 "$R" add "$WORK/other.toml" > "$WORK/other.added"
+assert_eq "0" "$?" "別テーブルがあっても add は 0"
+# spaces 側は無傷、agents 側にだけ入ること
+spaces_line="$(grep -n 'ui.sidebar.spaces' -A1 "$WORK/other.added" | tail -1)"
+assert_eq "no" "$(printf '%s' "$spaces_line" | grep -qF 'reason' && echo yes || echo no)" \
+  "spaces テーブルの rows には入らない"
+agents_line="$(grep -n 'ui.sidebar.agents' -A1 "$WORK/other.added" | tail -1)"
+assert_eq "yes" "$(printf '%s' "$agents_line" | grep -qF 'reason' && echo yes || echo no)" \
+  "agents テーブルの rows に入る"
+
+# --- 子テーブルの rows を掴まないこと ---
+cat > "$WORK/child.toml" <<'EOF'
+[ui.sidebar.agents]
+row_gap = 0
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [["agent"]]
+EOF
+python3 "$R" add "$WORK/child.toml" > "$WORK/child.added"
+assert_eq "no" "$(grep -A2 'rows_by_agent' "$WORK/child.added" | grep -qF 'reason' && echo yes || echo no)" \
+  "rows_by_agent の中には絶対に入れない"
+
 finish

@@ -30,6 +30,17 @@ assert_eq "1" "$(jq '[.hooks.PermissionRequest[]?.hooks[]?
 assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
   "PreToolUse に 1 エントリ"
+# --- C2: 指す先が消えても無害な形で配線されていること ---
+# herdr plugin uninstall は remove を実行しないのでこのエントリは残る。
+# 素に `bash <path>` だと消えたパスで exit 127 になり、以後すべての
+# PermissionRequest でエラーが出る（防御は消えたファイルの中にあるので効かない）
+cmd="$(jq -r '[.hooks.PermissionRequest[]?.hooks[]? | select(.command | test("island-reason")) | .command] | first' "$ISLAND_CLAUDE_SETTINGS")"
+assert_contains "$cmd" 'exit 0' "コマンドに存在確認と exit 0 が含まれる"
+# 実際に消えたパスを指させて、非ゼロで落ちないことを確かめる
+missing="$(printf '%s' "$cmd" | sed "s#'[^']*/hooks/island-reason.sh'#'/nonexistent/island-reason.sh'#")"
+bash -c "$missing" >/dev/null 2>&1
+assert_eq "0" "$?" "指す先が無くても exit 0（利用者のエージェントを壊さない）"
+
 assert_eq "AskUserQuestion" "$(jq -r '.hooks.PreToolUse[]
   | select(.hooks[]?.command | test("island-reason")) | .matcher' "$ISLAND_CLAUDE_SETTINGS")" \
   "PreToolUse の matcher は AskUserQuestion"

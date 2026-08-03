@@ -25,10 +25,40 @@ INLINE_INSERT = ", %s" % ROW_TEXT
 # rows = [ から対応する ] までを掴む。行頭の rows のみを対象にする
 ROWS_RE = re.compile(r"(?m)^([ \t]*)rows[ \t]*=[ \t]*\[")
 
+# 対象テーブルの見出しと、次のテーブル見出し（=テーブルの終端）
+TABLE_RE = re.compile(r"(?m)^[ \t]*\[ui\.sidebar\.agents\][ \t]*$")
+NEXT_TABLE_RE = re.compile(r"(?m)^[ \t]*\[")
+
+
+def agents_table_span(text):
+    """[ui.sidebar.agents] テーブルの本文範囲を返す。無ければ None。
+
+    範囲は見出しの次から、次のテーブル見出しの直前まで。
+    [ui.sidebar.agents.rows_by_agent] のような子テーブルも「次の見出し」
+    として扱う（そこにある rows は我々の対象ではない）。
+    """
+    m = TABLE_RE.search(text)
+    if not m:
+        return None
+    start = m.end()
+    nxt = NEXT_TABLE_RE.search(text, start)
+    return (start, nxt.start() if nxt else len(text))
+
 
 def find_rows_span(text):
-    """rows 配列の [ と対応する ] の位置を返す。無ければ None"""
-    m = ROWS_RE.search(text)
+    """rows 配列の [ と対応する ] の位置を返す。無ければ None。
+
+    探索は [ui.sidebar.agents] テーブルの中に限定する。ファイル全体から
+    最初の `rows =` を拾うと、先に [ui.sidebar.workspaces] などがある config で
+    そちらへ挿入してしまう。TOML としては妥当なので herdr config check は通り、
+    doctor もファイル全体を grep するため「あり」と報告する ——
+    全ての診断が正常と答える誤りになるため、範囲の限定が要る。
+    """
+    table = agents_table_span(text)
+    if table is None:
+        return None
+    lo, hi = table
+    m = ROWS_RE.search(text, lo, hi)
     if not m:
         return None
     open_at = text.index("[", m.end() - 1)

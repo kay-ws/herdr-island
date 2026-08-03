@@ -3,7 +3,10 @@ name = "Island"
 version = "1.0.0"
 min_herdr_version = "0.7.5"
 description = "Find the agents that are waiting on you. Shows why each agent stopped, and filters the Agents panel down to just those."
-platforms = ["linux", "macos"]
+# macOS は未検証のため対象外。BSD userland では mktemp -p / date %N /
+# chmod --reference がいずれも通らず、config 編集・hook 配線・reason 送信が
+# すべて失敗する。移植して実機確認できるまで宣言しない
+platforms = ["linux"]
 
 [[panes]]
 id = "setup"

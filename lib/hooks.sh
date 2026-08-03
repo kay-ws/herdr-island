@@ -10,7 +10,12 @@ codex_hooks()     { printf '%s' "${ISLAND_CODEX_HOOKS:-$HOME/.codex/hooks.json}"
 
 island_hook_cmd() {
   local root; root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-  printf "bash '%s/hooks/island-reason.sh'" "$root"
+  # 存在確認を外側に置く。`herdr plugin uninstall` は remove を実行しないため、
+  # このエントリは利用者の settings.json に残り、GitHub インストール版では
+  # 指す先（管理下のチェックアウト）だけが消える。素に `bash <path>` と書くと
+  # そこで exit 127 になり、以後すべての PermissionRequest でエラーが出る。
+  # 「必ず exit 0」の防御は消えたファイルの中にあるので効かない。
+  printf "bash -c '[ -f \"\$0\" ] || exit 0; exec bash \"\$0\"' '%s/hooks/island-reason.sh'" "$root"
 }
 
 # _wire <file> <install|uninstall> : rc 0=変更した / 10=変更不要 / 1=失敗
