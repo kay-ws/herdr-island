@@ -99,14 +99,26 @@ bash "$L" purge >/dev/null 2>&1
 assert_eq "0" "$(grep -c 'herdr-codex-usage' "$ISLAND_CODEX_HOOKS")" "codex 側の痕跡が消える"
 assert_eq "1" "$(grep -c 'keep-me' "$ISLAND_CODEX_HOOKS")" "codex 側の他人の hook は残る"
 
-# --- 対象ファイルが無くても異常終了しない ---
+# --- 対象ファイルが無くても残りは処理される ---
+# rc だけ見るアサーションは無意味。legacy_purge は無条件に 0 を返すので
+# 何をしても通ってしまう。「欠けたファイルで中断せず残りを処理したか」を見る
+seed
 rm -f "$ISLAND_CODEX_HOOKS" "$ISLAND_CCSTATUS"
 bash "$L" purge >/dev/null 2>&1
 assert_eq "0" "$?" "対象ファイルが無くても purge は 0"
+assert_eq "no" "$([ -f "$ISLAND_CODEX_HOOKS" ] && echo yes || echo no)" \
+  "無いファイルを勝手に作らない"
+assert_eq "0" "$(grep -c 'herdr-jump' "$ISLAND_CONFIG")" \
+  "一部が欠けていても残りのファイルは処理される"
 
 # --- 壊れた JSON は修復せず放置する ---
-printf 'this is not json' > "$ISLAND_CLAUDE_SETTINGS"
+# fixture に PAT 一致文字列を含めること。含めないと
+# `grep -qE "$PAT" || return 0` の門で短絡し、jq が呼ばれる前に関数が返る。
+# 検証したいのは「jq が失敗したとき元ファイルを書き戻さない」経路
+printf '{"hooks": broken herdr-jump-reason' > "$ISLAND_CLAUDE_SETTINGS"
 orig="$(cat "$ISLAND_CLAUDE_SETTINGS")"
+assert_eq "1" "$(grep -cE 'herdr-jump' "$ISLAND_CLAUDE_SETTINGS")" \
+  "前提: fixture は PAT に一致する（門で短絡しない）"
 bash "$L" purge >/dev/null 2>&1
 assert_eq "$orig" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "壊れた JSON は書き換えない"
 
