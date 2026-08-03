@@ -97,9 +97,12 @@ out="$(herdr plugin link "$here/.." 2>&1)"
 assert_contains "$out" '"plugin_id":"island"' "id は island"
 herdr plugin unlink island >/dev/null 2>&1
 
-# rows_by_agent への言及がリポジトリに残っていないこと（Global Constraints）
-hits="$(grep -rl 'rows_by_agent' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l)"
-assert_eq "0" "$hits" "bin/ lib/ は rows_by_agent を書かない"
+# rows_by_agent への「書き込み」がリポジトリに無いこと（Global Constraints）。
+# 検出して警告することは Task 8 の要件そのものなので、文字列としての言及
+# （grep での検出・警告文）まで禁じると要件と矛盾する。禁じるのはあくまで
+# TOML への代入形（`rows_by_agent = ...`）
+hits="$(grep -rlE 'rows_by_agent[[:space:]]*=' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l)"
+assert_eq "0" "$hits" "bin/ lib/ は rows_by_agent へ書き込まない（代入形が無い）"
 
 finish
 ```
@@ -1751,14 +1754,24 @@ island_hooks_install()   { _wire_both install; }
 island_hooks_uninstall() { _wire_both uninstall; }
 
 island_hooks_count() {
-  local n=0 f c
-  for f in "$(claude_settings)" "$(codex_hooks)"; do
-    [ -f "$f" ] || continue
-    c="$(jq '[.. | objects | select(has("command"))
-             | select(.command | test("island-reason"))] | length' "$f" 2>/dev/null)"
-    [ -n "$c" ] && n=$((n + c))
-  done
-  printf '%s' "$n"
+  # 「立てる」側は PermissionRequest(*) と PreToolUse(AskUserQuestion) の
+  # 2 スロットしか無い。settings.json と hooks.json の両方に同じ 2 スロットを
+  # 配線するので、ファイルごとの生エントリを単純合算すると常に 4 になり
+  # 「配線済みなら 2」という doctor の前提と食い違う。event:matcher で
+  # 重複排除し、実際に存在するスロット数を返す
+  local f
+  {
+    for f in "$(claude_settings)" "$(codex_hooks)"; do
+      [ -f "$f" ] || continue
+      jq -r '
+        (.hooks // {}) | to_entries[]
+        | .key as $event
+        | .value[]?
+        | select(.hooks[]?.command // "" | test("island-reason"))
+        | $event + ":" + (.matcher // "")
+      ' "$f" 2>/dev/null
+    done
+  } | sort -u | wc -l
 }
 
 case "${1:-}" in
