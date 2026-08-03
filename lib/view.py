@@ -48,15 +48,24 @@ def main():
     op = sys.argv[1] if len(sys.argv) > 1 else ""
     sf = state_file()
 
+    # state ファイルの意味は「サーバに実際に伝えた内容」であって
+    # 「ユーザーが望んでいる状態」ではない。restore の役目はサーバ再起動で
+    # 消えた view の復元なので、一度も適用されていない view を保存すると
+    # restore が嘘をつく（herdr 未起動時に focus を叩いた人が、次回起動時に
+    # 理由の分からない絞り込み画面に出会う）。よって送信成功時のみ更新する。
     if op == "set":
-        send("agent.view.set", PARAMS)
+        if not send("agent.view.set", PARAMS):
+            sys.stderr.write("herdr へ送信できませんでした\n")
+            return 1
         if sf:
             with open(sf, "w", encoding="utf-8") as f:
                 json.dump(PARAMS, f)
         return 0
 
     if op == "clear":
-        send("agent.view.clear", {"source": SOURCE})
+        if not send("agent.view.clear", {"source": SOURCE}):
+            sys.stderr.write("herdr へ送信できませんでした\n")
+            return 1
         if sf and os.path.exists(sf):
             os.remove(sf)
         return 0
