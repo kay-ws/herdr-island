@@ -1,17 +1,38 @@
 #!/bin/bash
-# herdr Agents パネルに「何で止まっているか」を出す。理由を立てるのみ。
+# herdr Agents パネルに「何で止まっているか」を出す。
 #
-# 消すのはプラグイン側の pane.agent_status_changed イベントが担当する。
-# ここで clear しないので、agent CLI の設定に入るのはこの 1 本だけで済む。
+#   引数なし … 理由を立てる（PermissionRequest / PreToolUse(AskUserQuestion)）
+#   clear    … 理由を消す（PostToolUse）
+#
+# clear がここに戻っているのは、セット側とクリア側の契機を対にするため。
+# プラグイン側の pane.agent_status_changed でも消しているが、あれは
+# 「状態が遷移したとき」しか発火しない。auto mode で自動承認された許可要求は
+# エージェントを blocked にしないため遷移が起きず、セットだけが起きて
+# クリアが起きない（TTL 15 分まで残る）。ツールの完了は必ず起きるので、
+# PostToolUse なら確実に対になる。
+#
+# ただし戻すのは PostToolUse の 1 本だけ。旧実装は PostToolBatch / Stop / TTL の
+# 3 経路で消しており、手で送った理由が即座に消えて目視確認ができなかった。
 #
 # 何があっても exit 0 する。表示が出ないのは許容できるが、
 # 非ゼロ終了でエージェントの動作に影響を与えるのは許容できない。
+
+mode="${1:-set}"
+[ "$mode" = "set" ] || [ "$mode" = "clear" ] || exit 0
 
 # ガード。herdr のペイン内で起動されたプロセスだけが通る
 [ "${HERDR_ENV:-}" = "1" ]      || exit 0
 [ -n "${HERDR_PANE_ID:-}" ]     || exit 0
 command -v jq    >/dev/null 2>&1 || exit 0
 command -v herdr >/dev/null 2>&1 || exit 0
+
+if [ "$mode" = "clear" ]; then
+  # PANE_ID はフラグより前（下の set 経路と同じ理由）
+  herdr pane report-metadata "$HERDR_PANE_ID" \
+    --source island \
+    --clear-token reason >/dev/null 2>&1
+  exit 0
+fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || exit 0
 FILTER="$here/reason-filter.jq"

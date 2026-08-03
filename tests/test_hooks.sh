@@ -45,7 +45,17 @@ assert_eq "AskUserQuestion" "$(jq -r '.hooks.PreToolUse[]
   | select(.hooks[]?.command | test("island-reason")) | .matcher' "$ISLAND_CLAUDE_SETTINGS")" \
   "PreToolUse の matcher は AskUserQuestion"
 
-# clear 系のイベントには配線しない（clear は herdr イベントが担当する）
+# 消す側は PostToolUse に 1 本だけ。セットの契機（許可要求 / 質問）に対して
+# ツール完了は必ず起きるので確実に対になる。herdr イベントだけでは
+# auto mode の自動承認のように「止まらない」経路でクリアが起きない
+assert_eq "1" "$(jq '[.hooks.PostToolUse[]?.hooks[]?
+  | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "PostToolUse に clear が 1 本"
+assert_contains "$(jq -r '[.hooks.PostToolUse[]?.hooks[]?.command] | first' "$ISLAND_CLAUDE_SETTINGS")" \
+  'exec bash "$0" clear' "PostToolUse は clear 引数つきで呼ぶ"
+
+# 旧実装は PostToolBatch / Stop / TTL の 3 経路で消しており、手で送った理由が
+# 即座に消えて目視確認ができなかった。戻すのは PostToolUse だけ
 assert_eq "0" "$(jq '[.hooks.PostToolBatch[]?.hooks[]?, .hooks.Stop[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
   "PostToolBatch / Stop には配線しない"
@@ -66,7 +76,7 @@ assert_eq "10" "$?" "2 回目の install は 10"
 assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
 
 # --- count ---
-assert_eq "2" "$(bash "$H" count)" "count は配線済みスロット数を返す"
+assert_eq "3" "$(bash "$H" count)" "count は配線済みスロット数を返す"
 
 # 出力が「裸の数値」であること。BSD/macOS の wc -l は先頭を空白で
 # パディングするため、値が正しくても文字列比較する呼び出し側で落ちる。
@@ -78,14 +88,14 @@ assert_eq "yes" "$(printf '%s' "$c" | grep -qE '^[0-9]+$' && echo yes || echo no
 # --- status: 部分配線を区別できること ---
 # count は両ファイルの和集合なので、片方だけ配線済みでも 2 を返す。
 # doctor が最も知りたい「どちらが未配線か」を出せるのは status だけ
-assert_contains "$(bash "$H" status)" "claude: 2/2" "status は claude の配線数を出す"
-assert_contains "$(bash "$H" status)" "codex: 2/2"  "status は codex の配線数を出す"
+assert_contains "$(bash "$H" status)" "claude: 3/3" "status は claude の配線数を出す"
+assert_contains "$(bash "$H" status)" "codex: 3/3"  "status は codex の配線数を出す"
 
 cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
 echo '{}' > "$ISLAND_CODEX_HOOKS"
-assert_contains "$(bash "$H" status)" "codex: 0/2"  "codex 未配線を 0/2 と出す"
-assert_contains "$(bash "$H" status)" "claude: 2/2" "その時も claude は 2/2 のまま"
-assert_eq "2" "$(bash "$H" count)" "count は片方だけでも 2 のまま（status が要る理由）"
+assert_contains "$(bash "$H" status)" "codex: 0/3"  "codex 未配線を 0/2 と出す"
+assert_contains "$(bash "$H" status)" "claude: 3/3" "その時も claude は 2/2 のまま"
+assert_eq "3" "$(bash "$H" count)" "count は片方だけでも 3 のまま（status が要る理由）"
 
 rm -f "$ISLAND_CODEX_HOOKS"
 assert_contains "$(bash "$H" status)" "codex: file missing" "ファイル自体が無い場合を区別する"

@@ -52,6 +52,29 @@ assert_eq "yes" "$(nothing_sent)" "壊れた JSON では何もしない"
 run_hook '{"tool_name":"Bash","tool_input":"oops"}'
 assert_eq "yes" "$(nothing_sent)" "tool_input の型が不正でも何もしない"
 
+# --- clear モード ---
+# セットとクリアの契機を対にするため PostToolUse から呼ばれる経路
+: > "$FAKE_HERDR_LOG"
+HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
+assert_contains "$(logged)" "--clear-token reason" "clear 引数で reason を消す"
+assert_contains "$(logged)" "--source island"      "clear も source は island"
+assert_eq "w0:p1" "$(logged | awk '{print $3}')"   "clear でも PANE_ID はフラグより前"
+assert_eq "no" "$(grep -q 'ttl-ms' "$FAKE_HERDR_LOG" && echo yes || echo no)" \
+  "clear に TTL は付けない"
+
+# clear は stdin を読まない（PostToolUse の payload は理由の材料ではない）
+: > "$FAKE_HERDR_LOG"
+printf 'this is not json' | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
+assert_contains "$(logged)" "--clear-token reason" "壊れた stdin でも clear は成立する"
+
+# 未知のモードでは何もしない
+: > "$FAKE_HERDR_LOG"
+HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" bogus >/dev/null 2>&1
+assert_eq "yes" "$(nothing_sent)" "未知のモードでは何もしない"
+
+HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
+assert_eq "0" "$?" "clear も exit 0"
+
 # --- python3 に依存しないこと ---
 # 禁じたいのは「python3 を起動すること」であって「python3 という語が
 # 出てくること」ではない。素の grep だと、なぜ python3 を呼ばないかを

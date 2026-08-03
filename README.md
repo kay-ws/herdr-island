@@ -66,14 +66,14 @@ The filter is a declarative view: it does not rewrite your configuration, and it
 | Location | What Island adds |
 |---|---|
 | `config.toml` | One row: `[{ token = "$reason", fg = "#f38ba8", bold = true }]` |
-| `~/.claude/settings.json` | Two hooks: `PermissionRequest` (`*`) and `PreToolUse` (`AskUserQuestion`) |
-| `~/.codex/hooks.json` | The same two |
+| `~/.claude/settings.json` | Three hooks: `PermissionRequest` (`*`) and `PreToolUse` (`AskUserQuestion`) set the reason; `PostToolUse` clears it |
+| `~/.codex/hooks.json` | The same three |
 
 That is the whole footprint. Island owns exactly one metadata token, `$reason`, and **never writes `ui.sidebar.agents.rows_by_agent`** — that key is a complete override in herdr, so setting it makes `rows` unreachable for the listed agents and would silently disable other plugins' rows.
 
 If `ui.sidebar.agents.rows` already exists, that one row is all Island adds. If it does not — no rows array at all, or a `[ui.sidebar.agents]` table with no `rows` key — there is nothing to append its row to, so Island materializes herdr's own default rows (state icon, workspace, agent name) alongside its own. `rows` is all-or-nothing in herdr; writing an array holding only Island's row would silently drop those defaults instead of adding to them.
 
-Only the *setting* side is wired into your agent's hooks. Clearing happens on herdr's own `pane.agent_status_changed` event, which means one clear path instead of several, and half as much wiring in configuration you own.
+Clearing is wired in two places, deliberately. herdr's own `pane.agent_status_changed` event clears the reason when a pane leaves the `blocked` state — but that event only fires on a *transition*, and a permission request that is auto-approved never blocks the agent, so nothing would clear it. A tool always finishes, so `PostToolUse` pairs reliably with whatever set the reason. That is the only clear-side hook: the earlier design cleared from three places and a manually-sent reason vanished before it could be read.
 
 `island.remove` undoes each step, confirming each separately.
 

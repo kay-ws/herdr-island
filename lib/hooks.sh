@@ -1,21 +1,35 @@
 #!/bin/bash
-# agent CLI 側の hook を配線する。理由を「立てる」1 本だけを入れる。
+# agent CLI 側の hook を配線する。3 本:
+#   PermissionRequest(*)              … 理由を立てる
+#   PreToolUse(AskUserQuestion)       … 理由を立てる
+#   PostToolUse(matcher 無し)         … 理由を消す
 #
-# clear はこちらに入れない。herdr の pane.agent_status_changed が担当する
-# （bin/on-status-changed.sh）。そのぶん他人の settings.json への侵襲が減る。
+# clear は herdr の pane.agent_status_changed（bin/on-status-changed.sh）でも
+# 行うが、あちらは状態が遷移したときしか発火しない。auto mode で自動承認された
+# 許可要求はエージェントを blocked にしないため遷移が起きず、セットだけが起きて
+# クリアが起きなかった（実測で TTL 15 分まで残留）。ツールの完了は必ず起きるので
+# PostToolUse なら確実に対になる。戻したのはこの 1 本だけで、旧実装の
+# PostToolBatch / Stop には配線しない。
 set -uo pipefail
 
 claude_settings() { printf '%s' "${ISLAND_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"; }
 codex_hooks()     { printf '%s' "${ISLAND_CODEX_HOOKS:-$HOME/.codex/hooks.json}"; }
 
+# island_hook_cmd [clear] : 配線するコマンド文字列。引数を付けると clear 用
 island_hook_cmd() {
   local root; root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  local arg="${1:-}"
   # 存在確認を外側に置く。`herdr plugin uninstall` は remove を実行しないため、
   # このエントリは利用者の settings.json に残り、GitHub インストール版では
   # 指す先（管理下のチェックアウト）だけが消える。素に `bash <path>` と書くと
   # そこで exit 127 になり、以後すべての PermissionRequest でエラーが出る。
   # 「必ず exit 0」の防御は消えたファイルの中にあるので効かない。
-  printf "bash -c '[ -f \"\$0\" ] || exit 0; exec bash \"\$0\"' '%s/hooks/island-reason.sh'" "$root"
+  if [ -n "$arg" ]; then
+    printf "bash -c '[ -f \"\$0\" ] || exit 0; exec bash \"\$0\" %s' '%s/hooks/island-reason.sh'" \
+      "$arg" "$root"
+  else
+    printf "bash -c '[ -f \"\$0\" ] || exit 0; exec bash \"\$0\"' '%s/hooks/island-reason.sh'" "$root"
+  fi
 }
 
 # _wire <file> <install|uninstall> : rc 0=変更した / 10=変更不要 / 1=失敗
@@ -28,10 +42,11 @@ _wire() {
   jq empty "$f" >/dev/null 2>&1 || return 1
 
   local cmd; cmd="$(island_hook_cmd)"
+  local clear_cmd; clear_cmd="$(island_hook_cmd clear)"
   local work; work="$(mktemp -d -p /tmp)" || return 1
   local cand="$work/out.json"
 
-  jq --arg cmd "$cmd" --arg op "$op" '
+  jq --arg cmd "$cmd" --arg clear_cmd "$clear_cmd" --arg op "$op" '
     # 自分のエントリだけを取り除く。他人の hook には触らない。
     # .hooks が無い / null のグループがあっても落ちないよう (. // []) で守る
     def purge:
@@ -49,6 +64,13 @@ _wire() {
         + (if $op == "install" then [entry("*"; $cmd)] else [] end))
     | .hooks.PreToolUse        = ((.hooks.PreToolUse | purge)
         + (if $op == "install" then [entry("AskUserQuestion"; $cmd)] else [] end))
+    # 消す側。セットの契機（許可要求 / 質問）に対して、ツール完了は必ず起きるので
+    # 確実に対になる。herdr の pane.agent_status_changed は状態が遷移したときしか
+    # 発火せず、auto mode で自動承認された許可要求のように「止まらない」経路では
+    # クリアが起きない（実測で TTL 15 分まで残留）。
+    # 戻すのは PostToolUse だけ —— 旧実装の PostToolBatch / Stop には配線しない。
+    | .hooks.PostToolUse       = ((.hooks.PostToolUse | purge)
+        + (if $op == "install" then [entry(""; $clear_cmd)] else [] end))
     | .hooks |= with_entries(select((.value | length) > 0))
   ' "$f" > "$cand" 2>/dev/null || { rm -rf "$work"; return 1; }
 
@@ -122,10 +144,10 @@ island_hooks_install()   { _wire_both install; }
 island_hooks_uninstall() { _wire_both uninstall; }
 
 island_hooks_count() {
-  # 「立てる」側は PermissionRequest(*) と PreToolUse(AskUserQuestion) の
-  # 2 スロットしか無い。settings.json と hooks.json の両方に同じ 2 スロットを
+  # スロットは PermissionRequest(*) / PreToolUse(AskUserQuestion) /
+  # PostToolUse の 3 つしか無い。settings.json と hooks.json の両方に同じ 3 スロットを
   # 配線するので、ファイルごとの生エントリを単純合算すると常に 4 になり
-  # 「配線済みなら 2」という doctor の前提と食い違う。event:matcher で
+  # 「配線済みなら 3」という doctor の前提と食い違う。event:matcher で
   # 重複排除し、実際に存在するスロット数を返す。
   local f
   {
@@ -145,7 +167,7 @@ island_hooks_count() {
 }
 
 # エージェントごとの配線状況を 1 行ずつ出す。
-# count は両ファイルの和集合なので「Claude だけ配線済み」でも 2 を返し、
+# count は両ファイルの和集合なので「Claude だけ配線済み」でも 3 を返し、
 # doctor が最も知りたい部分配線を映せない。診断はこちらを使う
 island_hooks_status() {
   # ラベルはファイルの中身/パスではなく「何番目に処理したか」で決める。
@@ -165,7 +187,7 @@ island_hooks_status() {
     fi
     c="$(jq -r '[ (.hooks // {}) | to_entries[] | .key as $event | .value[]? | select(.hooks[]?.command // "" | test("island-reason")) | $event + ":" + (.matcher // "") ] | unique | length' "$f" 2>/dev/null)"
     [ -n "$c" ] || c=0
-    printf '%s: %s/2\n' "$label" "$c"
+    printf '%s: %s/3\n' "$label" "$c"
   done
 }
 
