@@ -32,7 +32,13 @@ island_edit_config() {
 
   # バックアップ名はミリ秒まで含める。秒単位だと apply と revert を同じ秒に
   # 実行したとき cp が先のバックアップを黙って上書きする（cp に -n は無い）
-  cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S-%3N)" || { rm -rf "$work"; return 1; }
+  # ミリ秒（%3N）は GNU 拡張で BSD/macOS では展開されず、同一秒での
+  # 衝突回避が効かない（CI の macOS ジョブで実測）。欲しいのは
+  # 「同一秒でも一意なファイル名」であってミリ秒ではないので、
+  # 一意名の生成そのものを mktemp に任せる（-p は macOS でも動作を確認済み）
+  local bak; bak="$(mktemp "$cfg.bak.$(date +%Y%m%d-%H%M%S).XXXXXX")" \
+    || { rm -rf "$work"; return 1; }
+  cp -p "$cfg" "$bak" || { rm -rf "$work"; return 1; }
 
   # 置き換えはアトミックに。`cat "$cand" > "$cfg"` はリダイレクトの時点で
   # $cfg を切り詰めるため、途中で失敗すると実 config が壊れたまま残る。

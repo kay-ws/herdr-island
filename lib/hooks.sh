@@ -56,7 +56,10 @@ _wire() {
 
   if cmp -s "$f" "$cand"; then rm -rf "$work"; return 10; fi
 
-  cp -p "$f" "$f.bak.$(date +%Y%m%d-%H%M%S-%3N)" || { rm -rf "$work"; return 1; }
+  # %3N は GNU 拡張。一意名の生成は mktemp に任せる（bin/_config.sh と同じ理由）
+  local bak; bak="$(mktemp "$f.bak.$(date +%Y%m%d-%H%M%S).XXXXXX")" \
+    || { rm -rf "$work"; return 1; }
+  cp -p "$f" "$bak" || { rm -rf "$work"; return 1; }
   local stage; stage="$(mktemp "$(dirname "$f")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
   cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   chmod --reference="$f" "$stage" 2>/dev/null

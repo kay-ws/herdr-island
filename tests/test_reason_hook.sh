@@ -53,8 +53,12 @@ run_hook '{"tool_name":"Bash","tool_input":"oops"}'
 assert_eq "yes" "$(nothing_sent)" "tool_input の型が不正でも何もしない"
 
 # --- python3 に依存しないこと ---
-assert_eq "no" "$(grep -q 'python3' "$HOOK" && echo yes || echo no)" \
-  "hook のホットパスは python3 を使わない"
+# 禁じたいのは「python3 を起動すること」であって「python3 という語が
+# 出てくること」ではない。素の grep だと、なぜ python3 を呼ばないかを
+# 説明したコメントで落ちる（実際に落ちた）。コメント行を除いて判定する
+assert_eq "no" \
+  "$(grep -v '^[[:space:]]*#' "$HOOK" | grep -q 'python3' && echo yes || echo no)" \
+  "hook は python3 を起動しない（コメントでの言及は可）"
 
 # --- 終了コード ---
 printf 'not json' | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" >/dev/null 2>&1
