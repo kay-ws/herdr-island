@@ -456,13 +456,18 @@ source "$here/assert.sh"
 WORK="$(mktemp -d -p /tmp)"
 trap 'rm -rf "$WORK"' EXIT
 
-# config check を差し替えるための偽 herdr。argv を記録する
+# config check を差し替えるための偽 herdr。argv と HERDR_CONFIG_PATH を記録する。
+#
+# HERDR_CONFIG_PATH を記録するのが重要。実装が候補ファイルではなく実 config を
+# 検証するよう退行しても、argv だけ見ていると 13 個のアサーション全部が通る
+# ——「ゲートが動いているように見えて何も守っていない」状態を検出できない。
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/herdr" <<'EOF'
 #!/bin/bash
 printf '%s\n' "$*" >> "$FAKE_HERDR_LOG"
 case "$1 $2" in
   "config check")
+    printf '%s\n' "${HERDR_CONFIG_PATH:-UNSET}" >> "$FAKE_CHECKED_PATH_LOG"
     # ISLAND_TEST_CHECK=fail のときだけ失敗させる
     if [ "${ISLAND_TEST_CHECK:-ok}" = "fail" ]; then
       echo "config: issues found"; exit 1
@@ -491,6 +496,21 @@ assert_eq "no" "$(grep -q 'server restart' "$FAKE_HERDR_LOG" && echo yes || echo
   "restart は呼ばない"
 assert_eq "1" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" "バックアップを 1 つ取る"
 
+# 検証したのは候補ファイルであって実 config ではないこと。
+# これが実 config を指していたら、ゲートは常に通り何も守っていない
+checked="$(tail -1 "$FAKE_CHECKED_PATH_LOG")"
+assert_eq "no" "$([ "$checked" = "$CFG" ] && echo yes || echo no)" \
+  "検証対象は実 config ではない"
+assert_eq "no" "$([ "$checked" = "UNSET" ] && echo yes || echo no)" \
+  "HERDR_CONFIG_PATH を設定して検証している"
+
+# --- バックアップ名が同一秒でも衝突しないこと ---
+fresh
+bash "$here/../bin/apply.sh" >/dev/null 2>&1
+bash "$here/../bin/revert.sh" >/dev/null 2>&1
+assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" \
+  "同一秒内の 2 回の編集でバックアップが 2 つ残る"
+
 # --- 冪等 ---
 : > "$FAKE_HERDR_LOG"
 before="$(cat "$CFG")"
@@ -517,6 +537,59 @@ assert_eq "$orig" "$(cat "$CFG")" "revert で元とバイト一致"
 
 finish
 ```
+
+- [ ] **Step 1b: 本物の herdr を使う検証テストを書く**
+
+偽 `herdr` は「実装が正しい対象を検証しているか」しか見られない。ゲートが**実際に
+効くか**（本物の `herdr config check` が壊れた config を拒否するか）は本物でしか確かめ
+られない。ただし公開プラグインのテストが herdr の存在を必須にはしないよう、
+無い環境では skip する。
+
+`tests/test_apply_real.sh`:
+
+```bash
+#!/bin/bash
+set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/assert.sh"
+
+if ! command -v herdr >/dev/null 2>&1; then
+  echo "skip: herdr が無い環境のため検証ゲートの実測はスキップ"
+  finish
+fi
+
+WORK="$(mktemp -d -p /tmp)"
+trap 'rm -rf "$WORK"' EXIT
+
+CFG="$WORK/config.toml"
+export ISLAND_CONFIG="$CFG"
+
+# $ 無しのカスタムトークンは herdr が拒否する。これを候補として食わせたとき
+# 本番ファイルが変更されないことを、本物の herdr の判定で確かめる
+printf '[ui.sidebar.agents]\nrows = [["agent"]]\n' > "$CFG"
+orig="$(cat "$CFG")"
+
+# 本物の herdr が壊れた config を実際に拒否することをまず確認する
+printf '[ui.sidebar.agents]\nrows = [["agent"], ["reason"]]\n' > "$WORK/bad.toml"
+HERDR_CONFIG_PATH="$WORK/bad.toml" herdr config check > "$WORK/check.out" 2>&1
+assert_eq "1" "$?" "本物の herdr は \$ 無しトークンの config を exit 1 で拒否する"
+
+# 正常な候補は通ること（ゲートが常に落ちるだけの実装ではないことの確認）
+printf '[ui.sidebar.agents]\nrows = [["agent"], [{ token = "$reason" }]]\n' > "$WORK/good.toml"
+HERDR_CONFIG_PATH="$WORK/good.toml" herdr config check > /dev/null 2>&1
+assert_eq "0" "$?" "本物の herdr は \$ つきトークンの config を通す"
+
+# apply が本物の検証を経て成功し、結果も本物に通ること
+bash "$here/../bin/apply.sh" >/dev/null 2>&1
+HERDR_CONFIG_PATH="$CFG" herdr config check > /dev/null 2>&1
+assert_eq "0" "$?" "apply 後の config は本物の herdr の検証を通る"
+assert_contains "$(cat "$CFG")" '$reason' "apply が行を入れている"
+
+finish
+```
+
+**注意:** 終了コードは必ずリダイレクト後に直接読む。`herdr config check | head` の
+`$?` は `head` の終了コードであり、不正な config でも 0 に見える。
 
 - [ ] **Step 2: 失敗を確認する**
 
@@ -560,8 +633,18 @@ island_edit_config() {
     return 1
   fi
 
-  cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S)" || { rm -rf "$work"; return 1; }
-  cat "$cand" > "$cfg" || { rm -rf "$work"; return 1; }
+  # バックアップ名はミリ秒まで含める。秒単位だと apply と revert を同じ秒に
+  # 実行したとき cp が先のバックアップを黙って上書きする（cp に -n は無い）
+  cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S-%3N)" || { rm -rf "$work"; return 1; }
+
+  # 置き換えはアトミックに。`cat "$cand" > "$cfg"` はリダイレクトの時点で
+  # $cfg を切り詰めるため、途中で失敗すると実 config が壊れたまま残る。
+  # mv がアトミックなのは同一ファイルシステム内だけなので、一時ファイルは
+  # /tmp ではなく config と同じディレクトリに作る
+  local stage; stage="$(mktemp "$(dirname "$cfg")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
+  cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
+  chmod --reference="$cfg" "$stage" 2>/dev/null
+  mv -f "$stage" "$cfg" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   rm -rf "$work"
 
   herdr server reload-config >/dev/null 2>&1
