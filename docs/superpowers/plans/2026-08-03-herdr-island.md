@@ -382,7 +382,10 @@ def add(text):
 
 
 def remove(text):
-    for chunk in (MULTILINE_INSERT, INLINE_INSERT, BLOCK):
+    # 順序が重要。INLINE_INSERT は BLOCK の rows 行にそのまま含まれるため、
+    # INLINE を先に見るとケース C で BLOCK 全体ではなく断片だけが消えて
+    # 往復のバイト一致が壊れる。BLOCK を先に判定すること。
+    for chunk in (MULTILINE_INSERT, BLOCK, INLINE_INSERT):
         if chunk in text:
             return text.replace(chunk, "", 1)
     return None  # 自分が入れた形と完全一致するものが無い
