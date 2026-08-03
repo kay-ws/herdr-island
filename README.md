@@ -1,5 +1,7 @@
 # Island
 
+[![tests](https://github.com/kay-ws/herdr-island/actions/workflows/tests.yml/badge.svg)](https://github.com/kay-ws/herdr-island/actions/workflows/tests.yml)
+
 **Find the agents that are waiting on you.**
 
 When several coding agents run at once, the hard question is not "what are they doing" — it is "which one is stuck on me, and why". Island puts the reason an agent stopped into herdr's Agents panel, and filters that panel down to only the agents that are actually waiting.

@@ -1,0 +1,82 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    name: linux (supported)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 2 つのテストが実物の herdr を要求する:
+      #   test_manifest.sh  … herdr plugin link でマニフェストを検証させる
+      #   test_apply_real.sh … 本物の herdr config check で検証ゲートを確かめる
+      # herdr は単一バイナリで配布されているので、取得して PATH に置くだけでよい。
+      # test_apply_real.sh は herdr 不在なら skip する作りなので、この手順が
+      # 失敗しても suite は緑になってしまう —— 取得の成否をここで明示的に見る。
+      - name: install herdr
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /usr/local/bin/herdr \
+            https://github.com/herdrdev/herdr/releases/latest/download/herdr-linux-x86_64
+          chmod +x /usr/local/bin/herdr
+          herdr --version
+
+      - name: dependencies
+        run: |
+          set -euo pipefail
+          jq --version
+          python3 --version   # tests/test_rows.sh は tomllib を使うので 3.11+
+
+      - name: run tests
+        run: bash tests/run.sh
+
+  macos:
+    # まだ移植していない。宣言せずに黙って壊れているより、壊れ方を CI に
+    # 列挙させたいので走らせる。必須にはしない —— 常時赤は CI を見なくさせる。
+    # 既知の非互換は BSD userland との差 3 種:
+    #   mktemp -p / date %N / chmod --reference
+    # 移植が済んだら continue-on-error を外し、herdr-plugin.toml の
+    # platforms に macos を戻す。
+    name: macos (not yet supported — informational)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install herdr
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /usr/local/bin/herdr \
+            https://github.com/herdrdev/herdr/releases/latest/download/herdr-macos-aarch64
+          chmod +x /usr/local/bin/herdr
+          herdr --version
+
+      - name: dependencies
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null || brew install jq
+          jq --version
+          python3 --version
+
+      - name: run tests
+        run: bash tests/run.sh
+
+      # 何が BSD で壊れるかを 1 画面に集める。移植の作業リストになる。
+      - name: portability probe
+        if: always()
+        run: |
+          echo "--- mktemp -d -p ---"
+          mktemp -d -p /tmp 2>&1 | head -2 || true
+          echo "--- date +%s%3N ---"
+          date +%s%3N 2>&1 | head -2 || true
+          echo "--- chmod --reference ---"
+          touch /tmp/a /tmp/b
+          chmod --reference=/tmp/a /tmp/b 2>&1 | head -2 || true
+          echo "--- bash version (macOS 標準は 3.2) ---"
+          bash --version | head -1
