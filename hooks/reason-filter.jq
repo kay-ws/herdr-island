@@ -23,10 +23,15 @@ def body:
 
 # 行頭に出す見出し。label は jq の予約語（label $out | break）なので使えない
 def heading:
-  if .tool_name == "AskUserQuestion" then "質問" else (.tool_name // "?") end;
+  # 他の tool は .tool_name をそのまま出す（Bash / Edit …）ので既定は英語。
+  # AskUserQuestion だけ短縮する —— そのまま出すと 15 文字で、40 文字上限と
+  # サイドバー幅の両方を圧迫し、肝心の本文が truncate される
+  if .tool_name == "AskUserQuestion" then "Question" else (.tool_name // "?") end;
 
 if .hook_event_name == "Elicitation" then
-  "MCP: " + (.message // .mcp_server_name // "入力待ち")
+  # message も server 名も取れないときのフォールバック。これはプラグインが
+  # 生成する文言であって利用者の payload ではないので英語で出す
+  "MCP: " + (.message // .mcp_server_name // "input needed")
 else
   (heading as $h | body as $b
    | if $b == "" then $h else ($h + ": " + $b) end)

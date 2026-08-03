@@ -27,7 +27,7 @@ assert_eq "Write: memo.md" \
   "$(reason '{"tool_name":"Write","tool_input":{"file_path":"/x/memo.md"}}')" \
   "Write も basename"
 
-assert_eq "質問: 実装方針" \
+assert_eq "Question: 実装方針" \
   "$(reason '{"tool_name":"AskUserQuestion","tool_input":{"questions":[{"header":"実装方針"}]}}')" \
   "AskUserQuestion は header"
 
@@ -65,6 +65,6 @@ jbody='あいうえおかきくけこあいうえおかきくけこあいうえ�
 jout="$(reason "$(jq -nc --arg h "$jbody" '{tool_name:"AskUserQuestion",tool_input:{questions:[{header:$h}]}}')")"
 assert_eq "40"   "$(printf '%s' "$jout" | jq -Rr 'length')"                  "日本語でも 40 文字に収まる"
 assert_eq "true" "$(printf '%s' "$jout" | jq -Rr 'endswith("…")')"           "日本語でも … が付く"
-assert_eq "true" "$(printf '%s' "$jout" | jq -Rr 'startswith("質問: あいうえお")')" "先頭は保たれる"
+assert_eq "true" "$(printf '%s' "$jout" | jq -Rr 'startswith("Question: あいうえお")')" "先頭は保たれる"
 
 finish
