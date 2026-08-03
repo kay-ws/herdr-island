@@ -1649,7 +1649,23 @@ assert_eq "10" "$?" "2 回目の install は 10"
 assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
 
 # --- count ---
-assert_eq "2" "$(bash "$H" count)" "count は配線済みエントリ数を返す"
+assert_eq "2" "$(bash "$H" count)" "count は配線済みスロット数を返す"
+
+# --- status: 部分配線を区別できること ---
+# count は両ファイルの和集合なので、片方だけ配線済みでも 2 を返す。
+# doctor が最も知りたい「どちらが未配線か」を出せるのは status だけ
+assert_contains "$(bash "$H" status)" "claude: 2/2" "status は claude の配線数を出す"
+assert_contains "$(bash "$H" status)" "codex: 2/2"  "status は codex の配線数を出す"
+
+cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
+echo '{}' > "$ISLAND_CODEX_HOOKS"
+assert_contains "$(bash "$H" status)" "codex: 0/2"  "codex 未配線を 0/2 と出す"
+assert_contains "$(bash "$H" status)" "claude: 2/2" "その時も claude は 2/2 のまま"
+assert_eq "2" "$(bash "$H" count)" "count は片方だけでも 2 のまま（status が要る理由）"
+
+rm -f "$ISLAND_CODEX_HOOKS"
+assert_contains "$(bash "$H" status)" "codex: ファイル無し" "ファイル自体が無い場合を区別する"
+mv "$ISLAND_CODEX_HOOKS.keep" "$ISLAND_CODEX_HOOKS"
 
 # --- uninstall ---
 bash "$H" uninstall >/dev/null 2>&1
@@ -1774,11 +1790,32 @@ island_hooks_count() {
   } | sort -u | wc -l
 }
 
+# エージェントごとの配線状況を 1 行ずつ出す。
+# count は両ファイルの和集合なので「Claude だけ配線済み」でも 2 を返し、
+# doctor が最も知りたい部分配線を映せない。診断はこちらを使う
+island_hooks_status() {
+  local f label c
+  for f in "$(claude_settings)" "$(codex_hooks)"; do
+    case "$f" in
+      *codex*) label=codex ;;
+      *)       label=claude ;;
+    esac
+    if [ ! -f "$f" ]; then
+      printf '%s: ファイル無し\n' "$label"
+      continue
+    fi
+    c="$(jq -r '[ (.hooks // {}) | to_entries[] | .key as $event | .value[]? | select(.hooks[]?.command // "" | test("island-reason")) | $event + ":" + (.matcher // "") ] | unique | length' "$f" 2>/dev/null)"
+    [ -n "$c" ] || c=0
+    printf '%s: %s/2\n' "$label" "$c"
+  done
+}
+
 case "${1:-}" in
   install)   island_hooks_install ;;
   uninstall) island_hooks_uninstall ;;
   count)     island_hooks_count ;;
-  *) echo "usage: hooks.sh {install|uninstall|count}" >&2; exit 1 ;;
+  status)    island_hooks_status ;;
+  *) echo "usage: hooks.sh {install|uninstall|count|status}" >&2; exit 1 ;;
 esac
 ```
 
@@ -1834,7 +1871,9 @@ assert_contains "$(cat "$ISLAND_CONFIG")" '$reason' "config に行が入る"
 
 # doctor が現状を報告できること
 d="$(bash "$here/../bin/doctor.sh" 2>&1)"
-assert_contains "$d" "reason" "doctor は reason 行の状態を報告する"
+# 「reason」だけを見るアサーションは、あり/なしの判定が壊れていても通る。
+# 適用済みの状態なので「あり」と出ることまで確かめる
+assert_contains "$d" "reason 行: あり" "doctor は reason 行ありを報告する"
 
 # remove で戻ること
 bash "$here/../bin/remove.sh" >/dev/null 2>&1
@@ -2004,7 +2043,8 @@ for c in herdr jq python3; do
 done
 
 echo "hook の配線:"
-echo "  配線済みエントリ数: $(bash "$root/lib/hooks.sh" count)（配線済みなら 2）"
+# エージェントごとに出す。合算値だと「片方だけ配線済み」が見えない
+bash "$root/lib/hooks.sh" status | while IFS= read -r line; do echo "  $line"; done
 
 echo "絞り込み:"
 [ -f "${HERDR_PLUGIN_STATE_DIR:-/nonexistent}/view.json" ] \
