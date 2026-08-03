@@ -150,4 +150,21 @@ python3 "$R" remove "$WORK/child.added" > "$WORK/child.back"
 assert_eq "0" "$(cmp -s "$WORK/child.toml" "$WORK/child.back" && echo 0 || echo 1)" \
   "child: add -> remove で元とバイト一致"
 
+
+# --- 空配列（controller の独立検証で発覚。実装者のケース列挙に無かった形）---
+# rows = [] に `, ROW` を足すと `rows = [, ROW]` と先頭カンマになり不正な TOML。
+# I2（末尾カンマが無い）と同じ「カンマの要否を中身で決める」問題の裏返し。
+# 空かつ複数行（rows = [\n]）は「最後の要素」が存在しないので、
+# カンマ判定の手前で処理しないと複数行パスが誤認する
+roundtrip empty_inline '[ui.sidebar.agents]
+rows = []
+'
+roundtrip empty_spaced '[ui.sidebar.agents]
+rows = [   ]
+'
+roundtrip empty_multiline '[ui.sidebar.agents]
+rows = [
+]
+'
+
 finish

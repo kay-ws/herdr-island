@@ -139,6 +139,17 @@ def add(text):
         return text[:insert_at] + TABLE_INSERT + text[insert_at:]
     open_at, close_at = span
     body = text[open_at : close_at + 1]
+    # 空配列は「最後の要素」が存在しないので、カンマの要否を中身から
+    # 決める A1/A2/B の判定に先立って処理する。ここを分岐の後ろに置くと、
+    # rows = [\n] のように空かつ複数行の配列で「最後の要素」を誤認する
+    if text[open_at + 1 : close_at].strip() == "":
+        if "\n" in body:
+            # 閉じ ] を含む行の直前に足す。結果は A1 と同一形になるので
+            # remove 側に新しい形を増やさずに済む
+            line_start = text.rfind("\n", 0, close_at) + 1
+            return text[:line_start] + MULTILINE_INSERT + text[line_start:]
+        # 単一行の空配列。区切りを付けると `rows = [, ROW]` になり不正な TOML
+        return text[:close_at] + ROW_TEXT + text[close_at:]
     if "\n" in body:
         last = _last_nonspace_before(text, close_at)
         if text[last] == ",":
@@ -149,7 +160,7 @@ def add(text):
         # 補いながら自分の行を足す
         insert_at = last + 1
         return text[:insert_at] + MULTILINE_INSERT_NO_COMMA + text[insert_at:]
-    # ケース B: 閉じ ] の直前にインラインで足す
+    # ケース B: 閉じ ] の直前にインラインで足す（空配列は上で処理済み）
     return text[:close_at] + INLINE_INSERT + text[close_at:]
 
 
@@ -176,12 +187,17 @@ def remove(text):
     #    ファイルに紛れ込むことは無い——NC は自分の行にカンマを
     #    付けないので、"ROW_TEXT,\n" という並びがそもそも生まれない。
     #    この非対称性から、衝突しても安全な NC を先に調べる。
+    # 3) 素の ROW_TEXT（空配列 rows = [] に区切り無しで入れた形）は
+    #    上記 5 形すべての部分文字列なので、必ず最後に調べる。先に調べると
+    #    どの形で入っていても ROW_TEXT 部分だけが剥がれ、区切りのカンマが
+    #    孤立して不正な TOML になる
     for chunk in (
         BLOCK,
         TABLE_INSERT,
         MULTILINE_INSERT_NO_COMMA,
         MULTILINE_INSERT,
         INLINE_INSERT,
+        ROW_TEXT,
     ):
         if chunk in text:
             return text.replace(chunk, "", 1)
