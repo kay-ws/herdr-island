@@ -1,162 +1,155 @@
-# herdr-jump
+# Island
 
-herdr の Agents パネルに「何で止まっているか」と context 使用率を表示する。
+**Find the agents that are waiting on you.**
 
-パネルを見れば用のあるエージェントが分かり、その行をクリックすればペインへ飛べる。
-飛ぶ機能自体は herdr 0.7.5 の Agents パネルが内蔵しているので、こちらは**飛ぶ判断に
-必要な情報をパネルへ流し込むこと**に徹する。
-
-## 何が出るか
+When several coding agents run at once, the hard question is not "what are they doing" — it is "which one is stuck on me, and why". Island puts the reason an agent stopped into herdr's Agents panel, and filters that panel down to only the agents that are actually waiting.
 
 ```
-✓ ~ · 1
-  claude · Opus 5 (1M context)          ← どのエージェント / どのモデル
-  working  Bash: Remove node_modules    ← 状態と、止まっているならその理由
-  39% · 5h 12% | 7d 14%                 ← context 使用率と rate limits
+┌─ Agents ───────────────────┐
+│ ● api-server  ~  main      │
+│   claude                   │
+│   Permission: rm -rf dist  │  ← why it stopped
+│                            │
+│ ● docs  ~  guide           │
+│   codex                    │
+│   AskUserQuestion: A or B  │
+└────────────────────────────┘
 ```
 
-| セグメント | 出所 | 発火 |
-|---|---|---|
-| `state_icon` / `workspace` / `tab` / `agent` / `state_text` | herdr 内蔵 | 常時 |
-| `$reason` | `PermissionRequest` / `PreToolUse(AskUserQuestion)` フック | 止まった瞬間に1回 |
-| Claude の `$model` / `$ctx` / `$limits` | `ccstatus`（statusLine）の stdin JSON | 毎ターン |
-| Codex の `$model` | `SessionStart` フックの stdin JSON | 起動・再開・compact 後 |
-| Codex の `$ctx` | セッション JSONL の最新 `token_count` | 毎ターン |
+herdr already tells you an agent is `blocked`. Island tells you what it is blocked *on*.
 
-止まり方は1種類ではない。許可待ち（`PermissionRequest`）と質問待ち
-（`AskUserQuestion`）は別のイベントで届くので、両方を拾っている。
+## Install
 
-**auto mode を常用しているなら、実際に効くのは `AskUserQuestion` の経路。**
-auto mode では許可プロンプトがほとんど出ないので `PermissionRequest` の出番が少なく、
-一方ユーザーへの質問は auto mode でも止まる。
-
-`$reason` は**止まっている間しか値が入らない**。clear は3経路ある ——
-`PostToolBatch`（tool が終わった）/ `Stop`（ターンが終わった）/ TTL 15分。
-だからエージェントが動き終わった後に見ると空になっている。これは仕様で、
-応答済みの理由を残すと嘘になるため。
-
-**開発中に手で reason を送って目視確認することはできない。** 送る手段（Bash）が
-終わった瞬間に `PostToolBatch` が clear するので、必ず「一瞬見えて消える」。
-値が入ったことを確かめるなら snapshot を見る（下記トラブルシュート参照）。
-どうしても目視したいなら `~/.claude/settings.json` から `PostToolBatch` と `Stop` の
-herdr-jump エントリを一時的に外し、確認後 `./install.sh` で戻す。
-
-reason は 40 文字で切って送るが、**herdr 側もパネル幅で `…` に切る**ので、
-狭いサイドバーでは実際に見えるのはもっと短い。`trunc(40)` を下げてはいない ——
-切る判断は表示側の仕事で、サイドバーを広げれば全部見える。
-
-reason と usage は独立した2本の配管で、互いを知らない。**それが成り立つのは herdr が
-`tokens` をキー単位でマージするから** —— 毎ターン走る usage push が `{ctx, limits}` を
-送っても `reason` は残る（実測で確認済み）。置換方式なら usage push が reason を消し
-続けて機能しないので、これは配管を分ける前提そのもの。
-
-Codex では model、reason、context 使用率を表示する。statusLine 相当の仕組みが
-無いため、context 使用率は `CODEX_THREAD_ID` に対応するセッション JSONL から
-応答完了時に取得する。rate limits は表示しない。
-
-reason は 40 文字で切る。切り捨ては jq の文字列スライスで行うので、日本語混じりでも
-バイト境界を割らない。
-
-## インストール
-
-```bash
-./install.sh
+```sh
+herdr plugin install kay-ws/herdr-island
+herdr plugin pane open --plugin island --entrypoint setup
 ```
 
-以下を冪等に書き換える。何度実行しても結果は同じで、既存のフックは潰さない。
-書き換え前に `.bak.<timestamp>` を取る。
+Setup asks before each step. Nothing is written to your configuration without a prompt.
 
-| ファイル | 何を足すか |
+1. **Sidebar row** — appends one row to `ui.sidebar.agents.rows` so the reason is visible.
+2. **Agent hooks** — adds two entries to `~/.claude/settings.json` and `~/.codex/hooks.json` so your coding agent reports why it stopped.
+3. **Migration** — if an older `herdr-jump` installation is present, offers to remove it.
+
+Every file is backed up before it is touched, and the candidate configuration is validated with `herdr config check` before it replaces the real one. If validation fails, your configuration is left untouched.
+
+To see what is and is not configured without changing anything:
+
+```sh
+herdr plugin action invoke island.doctor
+```
+
+## Use
+
+| Action | Effect |
 |---|---|
-| `~/.claude/settings.json` | `PermissionRequest` / `PreToolUse` / `PostToolBatch` / `Stop` の4フック |
-| `~/.config/herdr/config.toml` | `[ui.sidebar.agents]` の行テンプレートと `agent_panel_sort` |
-| `~/.local/bin/ccstatus` | usage push の1行（`crmux` 行の直後） |
-| `~/.codex/hooks.json` | 同じ4フック + model と context 使用率（Codex はスキーマ互換） |
+| `island.focus` | Show only the agents waiting on you |
+| `island.unfocus` | Show everything again |
+| `island.doctor` | Report what is configured, and what is not |
 
-インストール後:
+Bind the toggle if you use it often:
 
-- Claude Code は次のセッションから有効
-- herdr は設定の再読み込みが必要（`herdr server reload-config`。**`restart` は使わない**
-  —— herdr のペインの中で作業していると自分ごと落ちる）
-- **Codex は次回起動時にフックの承認プロンプトが1回出る**
-
-Codex の `trusted_hash` を自動登録していないのは、ハッシュの入力正規化を特定できな
-かったため（コマンド文字列・改行付き・`hooks.json` 全体・フック本体・JSON シリアライズ
-の計6候補すべて不一致）。推測値を書くと Codex がフックを黙って無効化し、「なぜか
-動かない」という気づけない壊れ方になる。承認1回のほうが安い。
-
-## 依存
-
-`jq` と `python3`。
-
-**herdr CLI は使わない。** 0.7.5 の `herdr pane report-metadata` は `--source` に値を
-渡せない —— help は `[OPTIONS] --source <ID> <PANE_ID>` と書いているが実装が対応して
-おらず、`--source hj` は `unknown option: hj`、`--source=hj` は認識されず
-`missing required --source` になる。位置引数の `<PANE_ID>` も常に拒否される
-（`--token` と `--seq` はスペース形式で通るので `--source` 固有の不具合）。
-
-そのため socket API（`pane.report_metadata`）を直接叩いている。herdr 公式のフック
-`herdr-agent-state.sh` も同じく socket 直叩きなので、これが herdr の想定経路。
-送信は `lib/herdr-send.py` の 40 行程度が担い、JSON の組み立ては `jq` が行う。
-
-## テスト
-
-```bash
-bash tests/run.sh
+```toml
+[[keys.command]]
+key = "ctrl+shift+w"
+type = "plugin_action"
+command = "island.focus"
+description = "Island: show agents waiting on me"
 ```
 
-偽の UNIX socket サーバを立てて、フックが送った JSON-RPC をそのまま検証する
-（`tests/fake_socket.sh`）。本番と同じ経路を通るので、herdr 本体もエージェントも
-要らない。JSON で送るため値の空白や `|` はそのまま 1 フィールドとして届き、
-シェル引数のクォート漏れという失敗モードが構造的に存在しない。
+The filter is a declarative view: it does not rewrite your configuration, and it disappears when the plugin is disabled. Agents needing attention sort first, then by most recent state change.
 
-## うまく動かないとき
+## What it writes, and where
 
-**パネルに何も出ない** — トークンを送るだけでは表示されない。`~/.config/herdr/config.toml`
-の `[ui.sidebar.agents.rows_by_agent]` に置き場が要る。値の送信と並べ方は別の担当で、
-片方だけでは何も起きない。切り分けは手でフックを叩くのが速い:
+| Location | What Island adds |
+|---|---|
+| `config.toml` | One row: `[{ token = "$reason", fg = "#f38ba8", bold = true }]` |
+| `~/.claude/settings.json` | Two hooks: `PermissionRequest` (`*`) and `PreToolUse` (`AskUserQuestion`) |
+| `~/.codex/hooks.json` | The same two |
 
-```bash
-printf '{"tool_name":"Bash","tool_input":{"description":"手動テスト"}}' \
-  | bash hooks/herdr-jump-reason.sh set
+That is the whole footprint. Island owns exactly one metadata token, `$reason`, and **never writes `ui.sidebar.agents.rows_by_agent`** — that key is a complete override in herdr, so setting it makes `rows` unreachable for the listed agents and would silently disable other plugins' rows.
+
+Only the *setting* side is wired into your agent's hooks. Clearing happens on herdr's own `pane.agent_status_changed` event, which means one clear path instead of several, and half as much wiring in configuration you own.
+
+`island.remove` undoes each step, confirming each separately.
+
+## Using Island alongside Agent Usage
+
+[`senna-lang/herdr-agent-usage`](https://github.com/senna-lang/herdr-agent-usage) shows context meters and provider limits. Island shows why an agent stopped. They answer different questions and are built to sit side by side — Island deliberately does not display usage or model names, so it does not duplicate that plugin.
+
+Both contribute to the same `rows` array, so merge rather than replace. This is a working configuration with both installed:
+
+```toml
+[ui.sidebar.agents]
+row_gap = 0
+rows = [
+  ["state_icon", "$title"],
+  ["$provider", "$limit"],
+  ["$context"],
+  [{ token = "$reason", fg = "#f38ba8", bold = true }],
+]
 ```
 
-**送れたかどうかは snapshot で確認できる** —— パネルの見え方と切り離して判定できる:
+`island.apply` inserts its row into an existing `rows` array rather than replacing the table, so installing Island after Agent Usage leaves the Agent Usage rows intact. If `rows_by_agent` is present, setup warns you — that key would make the added row invisible with no error from herdr.
 
-```bash
-herdr api snapshot | jq '.result.snapshot.panes[]
-  | select(.pane_id == env.HERDR_PANE_ID) | .tokens'
+## Requirements
+
+- herdr 0.7.5 or newer
+- `jq`
+- `python3` — used for the filter query only; the reporting hot path is shell plus the `herdr` CLI
+- Linux or macOS
+
+No external Python packages, no toolchain, no build step.
+
+## How it works
+
+Two paths, deliberately separated.
+
+**Setting the reason.** A hook in your coding agent reads the payload of a permission request or a user question, extracts one line, and reports it as pane metadata:
+
+```
+herdr pane report-metadata <PANE_ID> --source island --token reason=... --ttl-ms 900000
 ```
 
-`tokens` に値が入っているのにパネルに出ないなら表示層（`config.toml`）の問題、
-`tokens` が空ならフック側の問題。**カスタムトークンの `$` を忘れると herdr が
-`[ui]` 設定を丸ごと拒否する**ので、その場合は
-`herdr server reload-config` の出力に診断が出る。
+The hook exits 0 on every path. A missing `jq`, an unreachable socket, a malformed payload — none may interfere with your agent's operation. Failing to display something is acceptable; getting in the way is not.
 
-**reason が消えない** — 許可を拒否したときは `PostToolBatch` が発火しない可能性がある。
-`Stop` フックがその取りこぼしを回収する設計なので、`~/.claude/settings.json` の `Stop`
-エントリを確認する。最後の保険として TTL 15 分で自動的に消える。
+**Clearing it.** herdr knows when a pane leaves the `blocked` state, so a plugin event handler clears the token there. This keeps the agent-side footprint to the two entries above, and means a reason stays visible until the agent actually moves on.
 
-**Codex で出ない** — 承認プロンプトを通したか確認する。`~/.codex/config.toml` の
-`[hooks.state]` に該当エントリが増えていれば通っている。
+**Filtering.** `agent.view.set` accepts a reported metadata token as a filter field, so the same token that is displayed is what the filter matches on:
 
-**`agent_panel_sort` を自分の値にしたい** — install.sh は既存の `agent_panel_sort` を
-**無警告で `"priority"` に書き換える**。`"spaces"` などを使いたい場合は install.sh を
-走らせた後に手で戻す（バックアップは `.bak.<timestamp>` に残っている）。
+```json
+{ "op": "exists", "field": { "token": "reason" } }
+```
 
-このキーは `[ui]` テーブルに属するので、手で書くなら `[ui]` セクションの中に置く。
-マーカーブロックの中に書いても効かない —— そこは末尾に追記されるため、`[ui]` を
-再定義すると TOML エラーになり、`ui.agent_panel_sort = ...` と書くと直前のテーブル内の
-キーとして解釈されて**パースは通るのに効かない**。
+## Troubleshooting
 
-## 設計
+**Nothing appears in the panel.** Reporting a token and displaying it are separate concerns; both are needed. Run `island.doctor` first. Then check what actually arrived:
 
-[docs/superpowers/specs/2026-07-30-herdr-agent-status-design.md](docs/superpowers/specs/2026-07-30-herdr-agent-status-design.md)
+```sh
+herdr api snapshot | jq '.result.snapshot.agents[] | {agent, reason: .tokens.reason}'
+```
 
-実装計画は
-[docs/superpowers/plans/2026-07-30-herdr-agent-status.md](docs/superpowers/plans/2026-07-30-herdr-agent-status.md)。
+Read `agents[]`, not `panes[]` — the sidebar renders from `agents[]`.
 
-v1（fzf によるペイン切り替え）の設計は
-[docs/superpowers/specs/2026-07-29-herdr-agent-jump-design.md](docs/superpowers/specs/2026-07-29-herdr-agent-jump-design.md)
-に残してある。そこで「できない」として落とした2件が実は両方できたことが、本設計の
-出発点になっている。
+If the token is present but nothing shows, the row is missing or shadowed: check for `rows_by_agent` in your `config.toml`. If the token is absent, the hooks are not wired — `island.doctor` reports `claude: N/2` and `codex: N/2` separately so you can tell which side is missing.
+
+**A custom token without `$`** makes herdr reject the entire `[ui]` block. Island always writes the `$` form; if you hand-edit, keep it.
+
+**Reasons never clear.** Clearing is driven by herdr's `pane.agent_status_changed` event. Confirm the plugin is enabled — a disabled plugin stops receiving events, and its view is dropped too.
+
+## Uninstall
+
+```sh
+herdr plugin pane open --plugin island --entrypoint remove
+herdr plugin uninstall island
+```
+
+`remove` clears the filter, offers to unwire the agent hooks, and offers to remove the configuration row. A row you have edited by hand is left alone — only an exact match of what Island inserted is removed.
+
+## Acknowledgements
+
+The name is a nod to [Vibe Island](https://vibeisland.app/), which framed the problem space — jump, monitor, approve, ask — that led this plugin to narrow to one of those verbs and do it properly.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

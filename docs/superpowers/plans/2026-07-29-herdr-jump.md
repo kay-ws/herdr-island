@@ -121,7 +121,7 @@ chmod +x ~/project/herdr-jump/tests/probe_focus_retention.sh
 [[keys.command]]
 key = "alt+p"
 type = "pane"
-command = "/home/kay/project/herdr-jump/tests/probe_focus_retention.sh"
+command = "~/project/herdr-jump/tests/probe_focus_retention.sh"
 description = "focus retention probe (temporary)"
 ```
 

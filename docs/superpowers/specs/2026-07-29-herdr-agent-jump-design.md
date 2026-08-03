@@ -80,10 +80,10 @@ agent explain →  state: working
 | `HERDR_TAB_ID` | popup 自身のタブ ID | `w0:t1` |
 | `HERDR_WORKSPACE_ID` | popup 自身のワークスペース ID | `w0` |
 | `HERDR_ACTIVE_PANE_ID` | 呼び出し元ペイン | `w0:p1` |
-| `HERDR_ACTIVE_PANE_CWD` | 呼び出し元の cwd | `/home/kay` |
+| `HERDR_ACTIVE_PANE_CWD` | 呼び出し元の cwd | `~` |
 | `HERDR_ACTIVE_TAB_ID` | 呼び出し元のタブ ID | `w0:t1` |
 | `HERDR_ACTIVE_WORKSPACE_ID` | 呼び出し元のワークスペース ID | `w0` |
-| `HERDR_BIN_PATH` | herdr 実行ファイルの絶対パス | `/home/kay/.local/bin/herdr` |
+| `HERDR_BIN_PATH` | herdr 実行ファイルの絶対パス | `~/.local/bin/herdr` |
 | `HERDR_SOCKET_PATH` | herdr サーバの制御 socket | `~/.config/herdr/herdr.sock` |
 
 `HERDR_ACTIVE_PANE_ID` は通常のシェルには注入されない（キーバインド起動時のみ）。

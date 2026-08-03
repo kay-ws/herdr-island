@@ -38,7 +38,7 @@ v1 のペイン切り替え UI を消す。これを先にやらないと `tests
 - [ ] **Step 1: 削除**
 
 ```bash
-cd /home/kay/project/herdr-jump
+cd ~/project/herdr-jump
 git rm herdr-jump.sh tests/test_format_agents.sh tests/probe_focus_retention.sh
 ```
 
@@ -776,7 +776,7 @@ cat > "$root/.claude/settings.json" <<'JSON'
   "hooks": {
     "PermissionRequest": [
       { "matcher": "*",
-        "hooks": [ { "type": "command", "command": "bash /home/kay/.superset/hooks/notify.sh" } ] }
+        "hooks": [ { "type": "command", "command": "bash ~/.superset/hooks/notify.sh" } ] }
     ]
   }
 }
