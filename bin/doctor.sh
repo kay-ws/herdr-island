@@ -9,30 +9,30 @@ cfg="$(island_config_path)"
 
 echo "config: $cfg"
 if [ -f "$cfg" ]; then
-  grep -q '\$reason' "$cfg" && echo "  reason 行: あり" || echo "  reason 行: なし"
+  grep -q '\$reason' "$cfg" && echo "  reason line: present" || echo "  reason line: absent"
   grep -q 'rows_by_agent' "$cfg" \
-    && echo "  rows_by_agent: あり（追加した行が無効化されます）" \
-    || echo "  rows_by_agent: なし"
+    && echo "  rows_by_agent: present (it disables the added row)" \
+    || echo "  rows_by_agent: absent"
 else
-  echo "  ファイルがありません"
+  echo "  file does not exist"
 fi
 
-echo "依存:"
+echo "dependencies:"
 for c in herdr jq python3; do
-  command -v "$c" >/dev/null 2>&1 && echo "  $c: あり" || echo "  $c: なし"
+  command -v "$c" >/dev/null 2>&1 && echo "  $c: found" || echo "  $c: not found"
 done
 
-echo "hook の配線:"
+echo "hook wiring:"
 # エージェントごとに出す。合算値だと「片方だけ配線済み」が見えない
 bash "$root/lib/hooks.sh" status | while IFS= read -r line; do echo "  $line"; done
 
-echo "絞り込み:"
+echo "filtering:"
 [ -f "${HERDR_PLUGIN_STATE_DIR:-/nonexistent}/view.json" ] \
-  && echo "  適用中" || echo "  未適用"
+  && echo "  active" || echo "  inactive"
 
-echo "旧 herdr-jump:"
+echo "old herdr-jump:"
 if bash "$root/lib/legacy.sh" detect 2>/dev/null | sed 's/^/  /'; then
-  echo "  ↑ 痕跡があります。setup から撤去できます"
+  echo "  ^ traces found. Remove them from setup"
 else
-  echo "  痕跡なし"
+  echo "  no traces"
 fi

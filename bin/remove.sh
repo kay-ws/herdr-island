@@ -13,26 +13,26 @@ confirm() {
   [ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
-echo "Island を取り外します。"
+echo "Removing Island."
 echo
 
 python3 "$root/lib/view.py" clear >/dev/null 2>&1
-echo "絞り込みを解除しました。"
+echo "Filtering has been cleared."
 
-if confirm "agent CLI 側の hook を外しますか？"; then
+if confirm "Remove the hook from the agent CLI?"; then
   bash "$root/lib/hooks.sh" uninstall
   case $? in
-    0)  echo "外しました。" ;;
-    10) echo "配線がありません。" ;;
-    *)  echo "外せませんでした。" ;;
+    0)  echo "Removed." ;;
+    10) echo "Nothing was wired." ;;
+    *)  echo "Could not remove it." ;;
   esac
 fi
 
-if confirm "config.toml から reason の行を除去しますか？"; then
+if confirm "Remove the reason line from config.toml?"; then
   island_edit_config remove
   case $? in
-    0)  echo "除去しました。" ;;
-    10) echo "除去対象がありません（手で編集された行は残します）。" ;;
-    *)  echo "除去できませんでした。" ;;
+    0)  echo "Removed." ;;
+    10) echo "Nothing to remove (hand-edited lines are left as-is)." ;;
+    *)  echo "Could not remove it." ;;
   esac
 fi

@@ -118,7 +118,7 @@ island_hooks_status() {
     f="${files[$i]}"
     label="${labels[$i]}"
     if [ ! -f "$f" ]; then
-      printf '%s: ファイル無し\n' "$label"
+      printf '%s: file missing\n' "$label"
       continue
     fi
     c="$(jq -r '[ (.hooks // {}) | to_entries[] | .key as $event | .value[]? | select(.hooks[]?.command // "" | test("island-reason")) | $event + ":" + (.matcher // "") ] | unique | length' "$f" 2>/dev/null)"

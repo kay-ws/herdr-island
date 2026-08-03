@@ -81,7 +81,7 @@ assert_contains "$(bash "$H" status)" "claude: 2/2" "その時も claude は 2/2
 assert_eq "2" "$(bash "$H" count)" "count は片方だけでも 2 のまま（status が要る理由）"
 
 rm -f "$ISLAND_CODEX_HOOKS"
-assert_contains "$(bash "$H" status)" "codex: ファイル無し" "ファイル自体が無い場合を区別する"
+assert_contains "$(bash "$H" status)" "codex: file missing" "ファイル自体が無い場合を区別する"
 mv "$ISLAND_CODEX_HOOKS.keep" "$ISLAND_CODEX_HOOKS"
 
 # --- uninstall ---

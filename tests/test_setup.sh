@@ -47,7 +47,7 @@ assert_contains "$(cat "$ISLAND_CONFIG")" '$reason' "config に行が入る"
 d="$(bash "$here/../bin/doctor.sh" 2>&1)"
 # 「reason」だけを見るアサーションは、あり/なしの判定が壊れていても通る。
 # 適用済みの状態なので「あり」と出ることまで確かめる
-assert_contains "$d" "reason 行: あり" "doctor は reason 行ありを報告する"
+assert_contains "$d" "reason line: present" "doctor は reason 行ありを報告する"
 
 # remove で戻ること
 bash "$here/../bin/remove.sh" >/dev/null 2>&1

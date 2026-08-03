@@ -6,7 +6,7 @@ source "$here/_config.sh"
 island_edit_config remove
 rc=$?
 case $rc in
-  0)  echo "reason の行を除去しました。" ;;
-  10) echo "除去対象がありません（手で編集された行は残します）。" ;;
+  0)  echo "Removed the reason line." ;;
+  10) echo "Nothing to remove (hand-edited lines are left as-is)." ;;
 esac
 exit $rc

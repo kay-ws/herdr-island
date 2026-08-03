@@ -6,7 +6,7 @@ source "$here/_config.sh"
 island_edit_config add
 rc=$?
 case $rc in
-  0)  echo "reason の行を追加しました。" ;;
-  10) echo "既に追加済みです。変更はありません。" ;;
+  0)  echo "Added the reason line." ;;
+  10) echo "Already added. No changes made." ;;
 esac
 exit $rc

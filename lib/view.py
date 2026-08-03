@@ -55,7 +55,7 @@ def main():
     # 理由の分からない絞り込み画面に出会う）。よって送信成功時のみ更新する。
     if op == "set":
         if not send("agent.view.set", PARAMS):
-            sys.stderr.write("herdr へ送信できませんでした\n")
+            sys.stderr.write("Could not send to herdr\n")
             return 1
         if sf:
             with open(sf, "w", encoding="utf-8") as f:
@@ -64,7 +64,7 @@ def main():
 
     if op == "clear":
         if not send("agent.view.clear", {"source": SOURCE}):
-            sys.stderr.write("herdr へ送信できませんでした\n")
+            sys.stderr.write("Could not send to herdr\n")
             return 1
         if sf and os.path.exists(sf):
             os.remove(sf)

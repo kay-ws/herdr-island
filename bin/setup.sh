@@ -18,16 +18,16 @@ confirm() {
   [ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
-echo "Island — 待っているエージェントを見つける"
+echo "Island — find agents that are waiting"
 echo
 
 # 1. 旧 herdr-jump の痕跡
 if bash "$root/lib/legacy.sh" detect > /tmp/island-legacy.$$ 2>/dev/null; then
-  echo "旧 herdr-jump の痕跡が見つかりました:"
+  echo "Found traces of the old herdr-jump:"
   sed 's/^/  /' /tmp/island-legacy.$$
   echo
-  if confirm "撤去しますか？"; then
-    bash "$root/lib/legacy.sh" purge && echo "撤去しました。"
+  if confirm "Remove them?"; then
+    bash "$root/lib/legacy.sh" purge && echo "Removed."
   fi
   echo
 fi
@@ -35,43 +35,43 @@ rm -f /tmp/island-legacy.$$
 
 # 2. rows_by_agent の影。complete override で新しい行が効かなくなる
 if [ -f "$cfg" ] && grep -q 'rows_by_agent' "$cfg" 2>/dev/null; then
-  echo "警告: config.toml に rows_by_agent があります。"
-  echo "  rows_by_agent は complete override です。該当エージェントには"
-  echo "  ui.sidebar.agents.rows が一切参照されず、追加した行が"
-  echo "  エラーも警告も無しに表示されません。"
-  echo "  手で確認して除去することを勧めます。"
+  echo "Warning: config.toml contains rows_by_agent."
+  echo "  rows_by_agent is a complete override in herdr. For any agent it lists,"
+  echo "  ui.sidebar.agents.rows is never consulted, so the row Island adds"
+  echo "  will not appear there — with no error or warning from herdr."
+  echo "  Recommend reviewing it by hand and removing it."
   echo
 fi
 
 # 3. reason 行の追加
-echo "追加する行:"
+echo "Row to add:"
 echo '  [{ token = "$reason", fg = "#f38ba8", bold = true }]'
 echo
-if confirm "config.toml に追加しますか？"; then
+if confirm "Add it to config.toml?"; then
   island_edit_config add
   case $? in
-    0)  echo "追加しました。" ;;
-    10) echo "既に追加済みです。" ;;
-    *)  echo "追加できませんでした。設定は変更していません。" ;;
+    0)  echo "Added." ;;
+    10) echo "Already added." ;;
+    *)  echo "Could not add it. Configuration was not modified." ;;
   esac
 else
-  echo "config は変更しませんでした。絞り込み機能だけなら設定不要で使えます。"
+  echo "config was not modified. The filtering feature alone works without configuration."
 fi
 
 # 4. agent CLI 側の hook 配線
 echo
-echo "停止理由を取得するには、Claude Code / Codex 側に hook を 1 本入れる必要があります。"
-echo "  対象: PermissionRequest（全ツール）と PreToolUse（AskUserQuestion のみ）"
-echo "  消す側の配線は入れません（herdr のイベントが担当します）"
+echo "To capture stop reasons, a hook must be wired into Claude Code / Codex."
+echo "  Targets: PermissionRequest (all tools) and PreToolUse (AskUserQuestion only)"
+echo "  The clearing side is not wired here (herdr's own event handles that)."
 echo
-if confirm "hook を配線しますか？"; then
+if confirm "Wire the hook?"; then
   bash "$root/lib/hooks.sh" install
   case $? in
-    0)  echo "配線しました。" ;;
-    10) echo "既に配線済みです。" ;;
-    *)  echo "配線できませんでした。設定は変更していません。" ;;
+    0)  echo "Wired." ;;
+    10) echo "Already wired." ;;
+    *)  echo "Could not wire it. Configuration was not modified." ;;
   esac
 fi
 
 echo
-echo "使い方: plugin action 'focus' で待っているエージェントだけに絞れます。"
+echo "Usage: plugin action 'focus' narrows the view to only waiting agents."
