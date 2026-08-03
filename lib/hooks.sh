@@ -158,32 +158,13 @@ _wire_both() {
 island_hooks_install()   { _wire_both install; }
 island_hooks_uninstall() { _wire_both uninstall; }
 
-island_hooks_count() {
-  # スロットは PermissionRequest(*) / PreToolUse(AskUserQuestion) /
-  # PostToolUse の 3 つしか無い。settings.json と hooks.json の両方に同じ 3 スロットを
-  # 配線するので、ファイルごとの生エントリを単純合算すると常に 4 になり
-  # 「配線済みなら 3」という doctor の前提と食い違う。event:matcher で
-  # 重複排除し、実際に存在するスロット数を返す。
-  local f
-  {
-    for f in "$(claude_settings)" "$(codex_hooks)"; do
-      [ -f "$f" ] || continue
-      jq -r '
-        (.hooks // {}) | to_entries[]
-        | .key as $event
-        | .value[]?
-        | select(.hooks[]?.command // "" | test("island-reason"))
-        | $event + ":" + (.matcher // "")
-      ' "$f" 2>/dev/null
-    done
-  # wc -l は BSD/macOS では先頭を空白でパディングする（"       2"）。
-  # 値は正しくても文字列比較に使う側で落ちるので、ここで数値へ正規化する
-  } | sort -u | wc -l | tr -d '[:space:]'
-}
-
 # エージェントごとの配線状況を 1 行ずつ出す。
-# count は両ファイルの和集合なので「Claude だけ配線済み」でも 3 を返し、
-# doctor が最も知りたい部分配線を映せない。診断はこちらを使う
+#
+# 以前は両ファイルを合算する island_hooks_count もあったが、和集合なので
+# 「Claude だけ配線済み」でも 3 を返し、doctor が最も知りたい部分配線を
+# 映せなかった。本番からは一度も呼ばれずテストだけが参照していたので削除した。
+# スロットは PermissionRequest(*) / PreToolUse(AskUserQuestion) /
+# PostToolUse の 3 つ
 island_hooks_status() {
   # ラベルはファイルの中身/パスではなく「何番目に処理したか」で決める。
   # パスの部分一致（*codex*）で判定すると、ISLAND_CODEX_HOOKS が
@@ -216,7 +197,6 @@ island_hooks_status() {
 case "${1:-}" in
   install)   island_hooks_install ;;
   uninstall) island_hooks_uninstall ;;
-  count)     island_hooks_count ;;
   status)    island_hooks_status ;;
-  *) echo "usage: hooks.sh {install|uninstall|count|status}" >&2; exit 1 ;;
+  *) echo "usage: hooks.sh {install|uninstall|status}" >&2; exit 1 ;;
 esac

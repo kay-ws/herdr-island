@@ -75,27 +75,23 @@ bash "$H" install >/dev/null 2>&1
 assert_eq "10" "$?" "2 回目の install は 10"
 assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
 
-# --- count ---
-assert_eq "3" "$(bash "$H" count)" "count は配線済みスロット数を返す"
-
-# 出力が「裸の数値」であること。BSD/macOS の wc -l は先頭を空白で
-# パディングするため、値が正しくても文字列比較する呼び出し側で落ちる。
-# 実際 CI の macOS ジョブはこれで 5 アサーション落ちた
-c="$(bash "$H" count)"
-assert_eq "yes" "$(printf '%s' "$c" | grep -qE '^[0-9]+$' && echo yes || echo no)" \
-  "count の出力に空白が混じらない（BSD の wc -l 対策）"
-
 # --- status: 部分配線を区別できること ---
-# count は両ファイルの和集合なので、片方だけ配線済みでも 2 を返す。
-# doctor が最も知りたい「どちらが未配線か」を出せるのは status だけ
+# 診断で本当に要るのは「どちらが未配線か」。両ファイルを合算する count も
+# あったが、和集合なので片方だけ配線済みでも 3 を返し、その区別を潰していた。
+# 本番からは呼ばれていなかったので削除済み
 assert_contains "$(bash "$H" status)" "claude: 3/3" "status は claude の配線数を出す"
 assert_contains "$(bash "$H" status)" "codex: 3/3"  "status は codex の配線数を出す"
+
+# 数え上げの出力に空白が混じらないこと。BSD/macOS の wc -l は先頭を空白で
+# パディングするため、値が正しくても文字列比較する側で落ちる。
+# 実際 CI の macOS ジョブはこれで 5 アサーション落ちた
+n="$(bash "$H" status | sed -n 's#^claude: \([0-9]*\)/3$#\1#p')"
+assert_eq "3" "$n" "配線数は空白の混じらない裸の数値（BSD の wc -l 対策）"
 
 cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
 echo '{}' > "$ISLAND_CODEX_HOOKS"
 assert_contains "$(bash "$H" status)" "codex: 0/3"  "codex 未配線を 0/3 と出す"
-assert_contains "$(bash "$H" status)" "claude: 3/3" "その時も claude は 3/3 のまま"
-assert_eq "3" "$(bash "$H" count)" "count は片方だけでも 3 のまま（status が要る理由）"
+assert_contains "$(bash "$H" status)" "claude: 3/3" "片方が未配線でも claude は 3/3 のまま"
 
 rm -f "$ISLAND_CODEX_HOOKS"
 assert_contains "$(bash "$H" status)" "codex: file missing" "ファイル自体が無い場合を区別する"

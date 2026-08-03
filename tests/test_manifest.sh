@@ -11,10 +11,17 @@ assert_eq "yes" "$([ -f "$M" ] && echo yes || echo no)" "マニフェストが�
 cleanup() { herdr plugin unlink island >/dev/null 2>&1; }
 trap cleanup EXIT
 
-# herdr 自身に検証させる。link できることが唯一の正解判定
-out="$(herdr plugin link "$here/.." 2>&1)"
-assert_contains "$out" '"plugin_id":"island"' "id は island"
-herdr plugin unlink island >/dev/null 2>&1
+# herdr 自身に検証させる。link できることが唯一の正解判定。
+# herdr が無いときは assert_contains の失敗（期待した文字列が無い）として
+# 出るだけで原因が読めないので、先に切り分けて名指しする
+if ! command -v herdr >/dev/null 2>&1; then
+  printf 'FAIL herdr が PATH に無いためマニフェストを検証できない\n' >&2
+  _fail=1
+else
+  out="$(herdr plugin link "$here/.." 2>&1)"
+  assert_contains "$out" '"plugin_id":"island"' "id は island"
+fi
+# unlink は trap の cleanup に任せる（早期終了しても確実に走る）
 
 # rows_by_agent への「書き込み」がリポジトリに無いこと（Global Constraints）。
 # 検出して警告することは Task 8 の要件そのものなので、文字列としての言及

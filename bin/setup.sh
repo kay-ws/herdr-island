@@ -22,16 +22,22 @@ echo "Island — find agents that are waiting"
 echo
 
 # 1. 旧 herdr-jump の痕跡
-if bash "$root/lib/legacy.sh" detect > /tmp/island-legacy.$$ 2>/dev/null; then
+#
+# 一時ファイルは mktemp で作る。/tmp/island-legacy.$$ は名前が PID から
+# 予測できるうえ、先回りして symlink を置かれると任意のファイルを踏む。
+# 後始末も trap に任せる —— 素の rm は SIGINT（プロンプト中の Ctrl-C）で
+# 到達せず、対話つきのこの経路では現実的に起きる
+legacy_out="$(mktemp)" || exit 1
+trap 'rm -f "$legacy_out"' EXIT
+if bash "$root/lib/legacy.sh" detect > "$legacy_out" 2>/dev/null; then
   echo "Found traces of the old herdr-jump:"
-  sed 's/^/  /' /tmp/island-legacy.$$
+  sed 's/^/  /' "$legacy_out"
   echo
   if confirm "Remove them?"; then
     bash "$root/lib/legacy.sh" purge && echo "Removed."
   fi
   echo
 fi
-rm -f /tmp/island-legacy.$$
 
 # 2. rows_by_agent の影。complete override で新しい行が効かなくなる
 if [ -f "$cfg" ] && grep -q 'rows_by_agent' "$cfg" 2>/dev/null; then

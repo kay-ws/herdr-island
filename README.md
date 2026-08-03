@@ -30,7 +30,7 @@ herdr plugin pane open --plugin island --entrypoint setup
 Setup asks before each step. Nothing is written to your configuration without a prompt.
 
 1. **Sidebar row** — appends one row to `ui.sidebar.agents.rows` so the reason is visible.
-2. **Agent hooks** — adds two entries to `~/.claude/settings.json` and `~/.codex/hooks.json` so your coding agent reports why it stopped.
+2. **Agent hooks** — adds three entries to `~/.claude/settings.json` and `~/.codex/hooks.json` so your coding agent reports why it stopped. Only agents you already have are wired: Island treats a missing `~/.claude` or `~/.codex` as "not installed" and never creates one.
 3. **Migration** — if an older `herdr-jump` installation is present, offers to remove it.
 
 Every file is backed up before it is touched, and the candidate configuration is validated with `herdr config check` before it replaces the real one. If validation fails, your configuration is left untouched.
@@ -48,6 +48,17 @@ herdr plugin action invoke island.doctor
 | `island.focus` | Show only the agents waiting on you |
 | `island.unfocus` | Show everything again |
 | `island.doctor` | Report what is configured, and what is not |
+| `island.apply` | Add the sidebar row to `config.toml` |
+| `island.revert` | Remove that row again |
+
+Invoke any of them with `herdr plugin action invoke <name>`. `setup` and `remove` are not in this list because they ask questions, and plugin actions have no terminal — they are popup panes instead:
+
+```sh
+herdr plugin pane open --plugin island --entrypoint setup
+herdr plugin pane open --plugin island --entrypoint remove
+```
+
+`apply` and `revert` are the same configuration step as `setup`'s, without the prompts — use them from scripts, or when you only want the row.
 
 Bind the toggle if you use it often:
 
@@ -75,7 +86,7 @@ If `ui.sidebar.agents.rows` already exists, that one row is all Island adds. If 
 
 Clearing is wired in two places, deliberately. herdr's own `pane.agent_status_changed` event clears the reason when a pane leaves the `blocked` state — but that event only fires on a *transition*, and a permission request that is auto-approved never blocks the agent, so nothing would clear it. A tool always finishes, so `PostToolUse` pairs reliably with whatever set the reason. That is the only clear-side hook: the earlier design cleared from three places and a manually-sent reason vanished before it could be read.
 
-`island.remove` undoes each step, confirming each separately.
+The `remove` pane undoes each step, confirming each separately.
 
 ## Using Island alongside Agent Usage
 
@@ -100,14 +111,29 @@ rows = [
 
 - herdr 0.7.5 or newer
 - `jq`
-- `python3` — used for the filter query only; the reporting hot path is shell plus the `herdr` CLI
+- `python3`, standard library only — used by `setup`, `remove`, `apply`, `revert`, `focus`, `unfocus`, and at startup. It is **not** on the reporting hot path: the hook that runs inside your coding agent is shell, `jq`, and the `herdr` CLI, so a missing or broken `python3` costs you configuration and filtering, never your agent. (Running the test suite additionally needs 3.11+, for `tomllib`.)
 - Linux or macOS (both are exercised by CI on every push)
 
 No external Python packages, no toolchain, no build step.
 
+### Environment variables
+
+Every path Island touches can be redirected. This is what the test suite uses, and it is also how you point Island at a non-standard layout.
+
+| Variable | Default | Used by |
+|---|---|---|
+| `ISLAND_CONFIG` | `${XDG_CONFIG_HOME:-~/.config}/herdr/config.toml` | `apply`, `revert`, `setup`, `remove`, `doctor` |
+| `ISLAND_CLAUDE_SETTINGS` | `~/.claude/settings.json` | hook wiring |
+| `ISLAND_CODEX_HOOKS` | `~/.codex/hooks.json` | hook wiring |
+| `ISLAND_CCSTATUS` | `~/.local/bin/ccstatus` | `herdr-jump` migration only |
+| `ISLAND_ASSUME_YES` | unset | `1` answers yes to every `setup` / `remove` prompt |
+| `ISLAND_REASON_FG` | `#f38ba8` | colour of the reason row |
+
+`ISLAND_REASON_FG` affects only what is written. `revert` matches the row by its `$reason` token, not by colour, so it still removes a row you added under a different value — and `apply` will not add a second one.
+
 ## How it works
 
-Two paths, deliberately separated.
+Three paths, deliberately separated.
 
 **Setting the reason.** A hook in your coding agent reads the payload of a permission request or a user question, extracts one line, and reports it as pane metadata:
 
@@ -117,7 +143,7 @@ herdr pane report-metadata <PANE_ID> --source island --token reason=... --ttl-ms
 
 The hook exits 0 on every path. A missing `jq`, an unreachable socket, a malformed payload — none may interfere with your agent's operation. Failing to display something is acceptable; getting in the way is not.
 
-**Clearing it.** herdr knows when a pane leaves the `blocked` state, so a plugin event handler clears the token there. This keeps the agent-side footprint to the two entries above, and means a reason stays visible until the agent actually moves on.
+**Clearing it.** Two triggers, because neither covers the other. A `PostToolUse` hook clears the token when the tool that caused the stop finishes — this is the reliable pair, since a tool always finishes. herdr's own `pane.agent_status_changed` event also clears it when a pane leaves the `blocked` state, which catches reasons that no tool completion follows.
 
 **Filtering.** `agent.view.set` accepts a reported metadata token as a filter field, so the same token that is displayed is what the filter matches on:
 
@@ -135,11 +161,11 @@ herdr api snapshot | jq '.result.snapshot.agents[] | {agent, reason: .tokens.rea
 
 Read `agents[]`, not `panes[]` — the sidebar renders from `agents[]`.
 
-If the token is present but nothing shows, the row is missing or shadowed: check for `rows_by_agent` in your `config.toml`. If the token is absent, the hooks are not wired — `island.doctor` reports `claude: N/2` and `codex: N/2` separately so you can tell which side is missing.
+If the token is present but nothing shows, the row is missing or shadowed: check for `rows_by_agent` in your `config.toml`. If the token is absent, the hooks are not wired — `island.doctor` reports `claude: N/3` and `codex: N/3` separately so you can tell which side is missing. `not installed` there means Island found no `~/.claude` or `~/.codex` at all, which is not a fault if you do not use that agent.
 
 **A custom token without `$`** makes herdr reject the entire `[ui]` block. Island always writes the `$` form; if you hand-edit, keep it.
 
-**Reasons never clear.** Clearing is driven by herdr's `pane.agent_status_changed` event. Confirm the plugin is enabled — a disabled plugin stops receiving events, and its view is dropped too.
+**Reasons never clear.** Check `island.doctor` reports `3/3`, not `2/3` — the clearing hook is the third entry, and an installation wired before it existed will be missing it. Re-run `setup` to add it. If it is wired and reasons still stick, confirm the plugin is enabled: a disabled plugin stops receiving `pane.agent_status_changed`, and its view is dropped too. Reasons expire on their own after 15 minutes in any case.
 
 ## Uninstall
 
@@ -148,7 +174,7 @@ herdr plugin pane open --plugin island --entrypoint remove
 herdr plugin uninstall island
 ```
 
-`remove` clears the filter, offers to unwire the agent hooks, and offers to remove the configuration row. A row you have edited by hand is left alone — only an exact match of what Island inserted is removed.
+`remove` clears the filter, offers to unwire the agent hooks, and offers to remove the configuration row. A row you have edited by hand is left alone — the match is exact apart from the `fg` colour, so changing the colour is safe but changing the shape means Island leaves the row for you to delete.
 
 ## Acknowledgements
 
