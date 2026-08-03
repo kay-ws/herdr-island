@@ -69,6 +69,7 @@ if confirm "Wire the hook?"; then
   case $? in
     0)  echo "Wired." ;;
     10) echo "Already wired." ;;
+    12) echo "Wiring was only partially applied. See the message above for which file changed and which did not." ;;
     *)  echo "Could not wire it. Configuration was not modified." ;;
   esac
 fi

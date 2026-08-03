@@ -65,14 +65,51 @@ _wire() {
   return 0
 }
 
-# 2 ファイルを順に処理する。どちらかが変更されれば 0、両方不要なら 10
+# _preflight_json <file> : file が存在しないか妥当な JSON なら 0、壊れていれば 1。
+# 読み取り専用（作成も書き換えもしない）。_wire_both が両方の書き込みに
+# 入る前にこれで両ファイルを検査し、片方が壊れているせいでもう片方だけ
+# 書き換わってしまう事故（I4）を根元で潰す
+_preflight_json() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  jq empty "$f" >/dev/null 2>&1
+}
+
+# _wire_both <install|uninstall> : rc 0=変更した / 10=変更不要 / 1=失敗（何も書いていない）
+# / 12=部分適用（一方は書けたがもう一方が失敗した。どちらがどちらかは
+# stderr にファイル名で出す）
+#
+# 2 ファイルを順に処理する。まず両方を pre-flight で検査し、どちらかが
+# 壊れていれば「候補を検証してから置く」の原則どおり、どちらにも触れず
+# 中断する（rc 1）。pre-flight を通った後も権限やディスク容量など
+# 予測できない理由で書き込みが失敗することはあり得るので、その場合は
+# 「何も変更していない」と嘘をつかず、変更できたファイルと失敗した
+# ファイルを名指しして rc 12 を返す。ロールバックはしない —
+# バックアップからの復元自体が失敗し得る書き込みであり、バックアップは
+# 利用者が自分で判断できるように残してあるものだから
 _wire_both() {
   local op="$1" changed=1 rc
-  local f
-  for f in "$(claude_settings)" "$(codex_hooks)"; do
+  local files=("$(claude_settings)" "$(codex_hooks)")
+  local f wrote=()
+
+  for f in "${files[@]}"; do
+    _preflight_json "$f" || {
+      echo "invalid JSON — aborting before any write: $f" >&2
+      return 1
+    }
+  done
+
+  for f in "${files[@]}"; do
     _wire "$f" "$op"; rc=$?
-    [ "$rc" -eq 1 ] && return 1
-    [ "$rc" -eq 0 ] && changed=0
+    if [ "$rc" -eq 1 ]; then
+      if [ "${#wrote[@]}" -gt 0 ]; then
+        echo "Partially applied: wrote ${wrote[*]}; failed to write $f." \
+          "${wrote[*]} was changed, $f was not." >&2
+        return 12
+      fi
+      return 1
+    fi
+    [ "$rc" -eq 0 ] && { changed=0; wrote+=("$f"); }
   done
   [ "$changed" -eq 0 ] && return 0
   return 10

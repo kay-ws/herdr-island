@@ -29,8 +29,16 @@ def state_file():
 
 
 def send(method, params):
+    # herdr の応答を読まずに True を返すと、herdr がリクエストを拒否した
+    # ケース（パラメータ名の誤り・必須フィールド欠落・スキーマ変更後の互換切れ）
+    # まで「成功」扱いになる。可視症状は「ボタンを押しても何も起きない」で、
+    # エラーがどこにも出ない。1 行の応答を読んで error キーの有無で判定し、
+    # 拒否ならメッセージを stderr に出す。settimeout は維持したまま —
+    # 応答が返らないサーバに無応答のまま待たされて呼び出し元がハングしない
+    # ようにする。timeout も OSError のサブクラスなのでここで失敗として拾われる
     path = os.environ.get("HERDR_SOCKET_PATH")
     if not path:
+        sys.stderr.write("Could not send to herdr (no socket path)\n")
         return False
     req = json.dumps({"id": "island", "method": method, "params": params})
     try:
@@ -38,10 +46,31 @@ def send(method, params):
         s.settimeout(2.0)
         s.connect(path)
         s.sendall(req.encode("utf-8") + b"\n")
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
         s.close()
-        return True
     except OSError:
+        sys.stderr.write("Could not send to herdr\n")
         return False
+
+    line = buf.split(b"\n", 1)[0]
+    try:
+        resp = json.loads(line.decode("utf-8"))
+    except ValueError:
+        sys.stderr.write("Could not send to herdr (malformed reply)\n")
+        return False
+
+    if isinstance(resp, dict) and "error" in resp:
+        err = resp.get("error")
+        msg = err.get("message") if isinstance(err, dict) else err
+        sys.stderr.write(f"herdr rejected the request: {msg}\n")
+        return False
+
+    return True
 
 
 def main():
@@ -55,7 +84,6 @@ def main():
     # 理由の分からない絞り込み画面に出会う）。よって送信成功時のみ更新する。
     if op == "set":
         if not send("agent.view.set", PARAMS):
-            sys.stderr.write("Could not send to herdr\n")
             return 1
         if sf:
             with open(sf, "w", encoding="utf-8") as f:
@@ -64,7 +92,6 @@ def main():
 
     if op == "clear":
         if not send("agent.view.clear", {"source": SOURCE}):
-            sys.stderr.write("Could not send to herdr\n")
             return 1
         if sf and os.path.exists(sf):
             os.remove(sf)
