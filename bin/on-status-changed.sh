@@ -12,7 +12,11 @@ payload="${HERDR_PLUGIN_EVENT_JSON:-}"
 [ -n "$payload" ] || exit 0
 
 pane="$(printf '%s' "$payload" | jq -r '.pane_id // ""' 2>/dev/null)"
-status="$(printf '%s' "$payload" | jq -r '.status // ""' 2>/dev/null)"
+# フィールド名は agent_status。status ではない（herdr 0.7.5 の
+# subscription_event スキーマ PaneAgentStatusChangedEvent で確認。
+# required は pane_id / workspace_id / agent_status で、status は存在しない）。
+# 間違えると常に空になりガードで抜け、clear が一度も走らない
+status="$(printf '%s' "$payload" | jq -r '.agent_status // ""' 2>/dev/null)"
 [ -n "$pane" ] || exit 0
 [ "$status" = "blocked" ] && exit 0
 [ -n "$status" ] || exit 0
