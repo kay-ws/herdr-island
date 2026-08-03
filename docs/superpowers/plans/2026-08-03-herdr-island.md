@@ -35,6 +35,7 @@
 | `lib/rows.py` | `config.toml` の `rows` へ1行を挿入 / 除去する文字列操作 |
 | `lib/view.py` | `agent.view.set` / `agent.view.clear` の socket 送信 |
 | `lib/legacy.sh` | 旧 herdr-jump の痕跡を4箇所から除去 |
+| `lib/hooks.sh` | agent CLI 側 hook の配線・撤去・本数確認 |
 | `bin/apply.sh` | action: 検証してから `config.toml` に行を足す（非対話） |
 | `bin/revert.sh` | action: 足した行を除去する（非対話） |
 | `bin/focus.sh` | action: 待っているエージェントだけに絞る |
@@ -1439,15 +1440,209 @@ git commit -m "機能: 旧 herdr-jump の撤去を追加
 ### Task 8: setup / remove の対話 popup
 
 **Files:**
+- Create: `lib/hooks.sh`
 - Create: `bin/setup.sh`、`bin/remove.sh`（Task 1 の空ファイルを置換）
 - Create: `bin/doctor.sh`（同上）
 - Create: `tests/test_setup.sh`
+- Create: `tests/test_hooks.sh`
 
 **Interfaces:**
 - Consumes: `lib/legacy.sh`（detect / purge）、`bin/_config.sh`（`island_edit_config`）、`lib/rows.py`
-- Produces: なし（最終利用者向けの導線）
+- Produces: `lib/hooks.sh` の3関数 — `island_hooks_install`（rc 0=配線した / 10=既に配線済み / 1=失敗）、`island_hooks_uninstall`（同）、`island_hooks_count`（配線済みエントリ数を stdout へ）
+
+**なぜ hook の配線がこのタスクに入るか:** Task 4 で削除した `install.sh` が
+`~/.claude/settings.json` と `~/.codex/hooks.json` への配線を担っていた。spec §5.3 が
+「`settings.json` への hook 追加も同じ手順（候補作成 → JSON パース確認 → バックアップ →
+置換）」を要求しているのに、当初の計画はこの受け皿を欠いていた（Task 4 のレビューが
+「install.sh 亡き後に配線する仕組みが計画のどこにも無い」と指摘して発覚）。導入・撤去の
+導線はすべてこのタスクが持つのが素直なので、ここに置く。
 
 **設計判断:** action には TTY が無い（fd0/1/2 すべて notty、`TERM` は継承されるため `TERM` での判定は誤る）。対話確認は popup pane でのみ可能。`ISLAND_ASSUME_YES=1` で確認を飛ばせるようにし、テストは非対話経路を通す。
+
+- [ ] **Step 0: hook 配線の失敗テストを書く**
+
+`tests/test_hooks.sh`:
+
+```bash
+#!/bin/bash
+set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/assert.sh"
+
+H="$here/../lib/hooks.sh"
+WORK="$(mktemp -d -p /tmp)"
+trap 'rm -rf "$WORK"' EXIT
+
+export ISLAND_CLAUDE_SETTINGS="$WORK/settings.json"
+export ISLAND_CODEX_HOOKS="$WORK/hooks.json"
+export HERDR_PLUGIN_ROOT="$here/.."
+
+# 他人の hook が入った settings.json から始める
+cat > "$ISLAND_CLAUDE_SETTINGS" <<'EOF'
+{"hooks":{"PreToolUse":[
+  {"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}
+]}}
+EOF
+echo '{}' > "$ISLAND_CODEX_HOOKS"
+
+# --- install ---
+bash "$H" install >/dev/null 2>&1
+assert_eq "0" "$?" "install は 0 を返す"
+
+# 設定した 2 経路が入っていること。set 専用なので clear は入らない
+assert_eq "1" "$(jq '[.hooks.PermissionRequest[]?.hooks[]?
+  | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "PermissionRequest に 1 エントリ"
+assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
+  | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "PreToolUse に 1 エントリ"
+assert_eq "AskUserQuestion" "$(jq -r '.hooks.PreToolUse[]
+  | select(.hooks[]?.command | test("island-reason")) | .matcher' "$ISLAND_CLAUDE_SETTINGS")" \
+  "PreToolUse の matcher は AskUserQuestion"
+
+# clear 系のイベントには配線しない（clear は herdr イベントが担当する）
+assert_eq "0" "$(jq '[.hooks.PostToolBatch[]?.hooks[]?, .hooks.Stop[]?.hooks[]?
+  | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "PostToolBatch / Stop には配線しない"
+
+# 他人の hook を壊していないこと
+assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
+  | select(.command == "other-tool")] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "他人の hook は残る"
+
+# 出力が妥当な JSON であること（壊れた JSON を書いたら次回以降すべて失敗する）
+jq empty "$ISLAND_CLAUDE_SETTINGS" 2>/dev/null
+assert_eq "0" "$?" "settings.json は妥当な JSON のまま"
+
+# --- 冪等 ---
+before="$(cat "$ISLAND_CLAUDE_SETTINGS")"
+bash "$H" install >/dev/null 2>&1
+assert_eq "10" "$?" "2 回目の install は 10"
+assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
+
+# --- count ---
+assert_eq "2" "$(bash "$H" count)" "count は配線済みエントリ数を返す"
+
+# --- uninstall ---
+bash "$H" uninstall >/dev/null 2>&1
+assert_eq "0" "$?" "uninstall は 0 を返す"
+assert_eq "0" "$(grep -c 'island-reason' "$ISLAND_CLAUDE_SETTINGS")" \
+  "island-reason の痕跡が消える"
+assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
+  | select(.command == "other-tool")] | length' "$ISLAND_CLAUDE_SETTINGS")" \
+  "uninstall 後も他人の hook は残る"
+
+# --- 壊れた JSON を渡されたら本番に触れない ---
+printf 'this is not json' > "$ISLAND_CLAUDE_SETTINGS"
+orig="$(cat "$ISLAND_CLAUDE_SETTINGS")"
+bash "$H" install >/dev/null 2>&1
+assert_eq "1" "$?" "壊れた JSON では 1 を返す"
+assert_eq "$orig" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "壊れた JSON のファイルは変更しない"
+
+finish
+```
+
+- [ ] **Step 0b: hook 配線を実装する**
+
+`lib/hooks.sh`:
+
+```bash
+#!/bin/bash
+# agent CLI 側の hook を配線する。理由を「立てる」1 本だけを入れる。
+#
+# clear はこちらに入れない。herdr の pane.agent_status_changed が担当する
+# （bin/on-status-changed.sh）。そのぶん他人の settings.json への侵襲が減る。
+set -uo pipefail
+
+claude_settings() { printf '%s' "${ISLAND_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"; }
+codex_hooks()     { printf '%s' "${ISLAND_CODEX_HOOKS:-$HOME/.codex/hooks.json}"; }
+
+island_hook_cmd() {
+  local root; root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  printf "bash '%s/hooks/island-reason.sh'" "$root"
+}
+
+# _wire <file> <install|uninstall> : rc 0=変更した / 10=変更不要 / 1=失敗
+_wire() {
+  local f="$1" op="$2"
+  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  [ -f "$f" ] || echo '{}' > "$f" || return 1
+
+  # 壊れた JSON には触らない。jq が失敗した結果を書き戻すと被害が広がる
+  jq empty "$f" >/dev/null 2>&1 || return 1
+
+  local cmd; cmd="$(island_hook_cmd)"
+  local work; work="$(mktemp -d -p /tmp)" || return 1
+  local cand="$work/out.json"
+
+  jq --arg cmd "$cmd" --arg op "$op" '
+    # 自分のエントリだけを取り除く。他人の hook には触らない。
+    # .hooks が無い / null のグループがあっても落ちないよう (. // []) で守る
+    def purge:
+      (. // [])
+      | map(.hooks |= ((. // []) | map(select(
+          ((.command // "") | test("island-reason")) | not))))
+      | map(select((.hooks | length) > 0));
+
+    def entry($matcher; $c):
+      (if $matcher == "" then {} else {matcher: $matcher} end)
+      + {hooks: [{type: "command", command: $c, timeout: 5}]};
+
+      .hooks = (.hooks // {})
+    | .hooks.PermissionRequest = ((.hooks.PermissionRequest | purge)
+        + (if $op == "install" then [entry("*"; $cmd)] else [] end))
+    | .hooks.PreToolUse        = ((.hooks.PreToolUse | purge)
+        + (if $op == "install" then [entry("AskUserQuestion"; $cmd)] else [] end))
+    | .hooks |= with_entries(select((.value | length) > 0))
+  ' "$f" > "$cand" 2>/dev/null || { rm -rf "$work"; return 1; }
+
+  jq empty "$cand" >/dev/null 2>&1 || { rm -rf "$work"; return 1; }
+
+  if cmp -s "$f" "$cand"; then rm -rf "$work"; return 10; fi
+
+  cp -p "$f" "$f.bak.$(date +%Y%m%d-%H%M%S-%3N)" || { rm -rf "$work"; return 1; }
+  local stage; stage="$(mktemp "$(dirname "$f")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
+  cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
+  chmod --reference="$f" "$stage" 2>/dev/null
+  mv -f "$stage" "$f" || { rm -f "$stage"; rm -rf "$work"; return 1; }
+  rm -rf "$work"
+  return 0
+}
+
+# 2 ファイルを順に処理する。どちらかが変更されれば 0、両方不要なら 10
+_wire_both() {
+  local op="$1" changed=1 rc
+  local f
+  for f in "$(claude_settings)" "$(codex_hooks)"; do
+    _wire "$f" "$op"; rc=$?
+    [ "$rc" -eq 1 ] && return 1
+    [ "$rc" -eq 0 ] && changed=0
+  done
+  [ "$changed" -eq 0 ] && return 0
+  return 10
+}
+
+island_hooks_install()   { _wire_both install; }
+island_hooks_uninstall() { _wire_both uninstall; }
+
+island_hooks_count() {
+  local n=0 f c
+  for f in "$(claude_settings)" "$(codex_hooks)"; do
+    [ -f "$f" ] || continue
+    c="$(jq '[.. | objects | select(has("command"))
+             | select(.command | test("island-reason"))] | length' "$f" 2>/dev/null)"
+    [ -n "$c" ] && n=$((n + c))
+  done
+  printf '%s' "$n"
+}
+
+case "${1:-}" in
+  install)   island_hooks_install ;;
+  uninstall) island_hooks_uninstall ;;
+  count)     island_hooks_count ;;
+  *) echo "usage: hooks.sh {install|uninstall|count}" >&2; exit 1 ;;
+esac
+```
 
 - [ ] **Step 1: 失敗テストを書く**
 
@@ -1581,6 +1776,21 @@ else
   echo "config は変更しませんでした。絞り込み機能だけなら設定不要で使えます。"
 fi
 
+# 4. agent CLI 側の hook 配線
+echo
+echo "停止理由を取得するには、Claude Code / Codex 側に hook を 1 本入れる必要があります。"
+echo "  対象: PermissionRequest（全ツール）と PreToolUse（AskUserQuestion のみ）"
+echo "  消す側の配線は入れません（herdr のイベントが担当します）"
+echo
+if confirm "hook を配線しますか？"; then
+  bash "$root/lib/hooks.sh" install
+  case $? in
+    0)  echo "配線しました。" ;;
+    10) echo "既に配線済みです。" ;;
+    *)  echo "配線できませんでした。設定は変更していません。" ;;
+  esac
+fi
+
 echo
 echo "使い方: plugin action 'focus' で待っているエージェントだけに絞れます。"
 ```
@@ -1608,6 +1818,15 @@ echo
 
 python3 "$root/lib/view.py" clear >/dev/null 2>&1
 echo "絞り込みを解除しました。"
+
+if confirm "agent CLI 側の hook を外しますか？"; then
+  bash "$root/lib/hooks.sh" uninstall
+  case $? in
+    0)  echo "外しました。" ;;
+    10) echo "配線がありません。" ;;
+    *)  echo "外せませんでした。" ;;
+  esac
+fi
 
 if confirm "config.toml から reason の行を除去しますか？"; then
   island_edit_config remove
@@ -1646,6 +1865,9 @@ for c in herdr jq python3; do
   command -v "$c" >/dev/null 2>&1 && echo "  $c: あり" || echo "  $c: なし"
 done
 
+echo "hook の配線:"
+echo "  配線済みエントリ数: $(bash "$root/lib/hooks.sh" count)（配線済みなら 2）"
+
 echo "絞り込み:"
 [ -f "${HERDR_PLUGIN_STATE_DIR:-/nonexistent}/view.json" ] \
   && echo "  適用中" || echo "  未適用"
@@ -1666,7 +1888,7 @@ Expected: 両方 PASS
 - [ ] **Step 5: コミット**
 
 ```bash
-git add bin/setup.sh bin/remove.sh bin/doctor.sh tests/test_setup.sh
+git add lib/hooks.sh bin/setup.sh bin/remove.sh bin/doctor.sh tests/test_setup.sh tests/test_hooks.sh
 git commit -m "機能: 対話つきの setup / remove と doctor を追加
 
 - 確認は popup 前提。TTY が無ければ no に倒し勝手に書き換えない
