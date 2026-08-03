@@ -3,7 +3,10 @@
 # install.sh に uninstall 経路が無かったため、撤去はここで新規に実装する。
 set -uo pipefail
 
-PAT='herdr-jump|herdr-usage-push'
+# 検出用。旧実装が残しうる識別子を網羅する。
+# herdr-codex-usage を落とすと、codex 側にそれしか無いファイルで detect が
+# rc 10（痕跡なし）を返し purge が無言で素通りする
+PAT='herdr-jump|herdr-usage-push|herdr-codex-usage'
 
 claude_settings() { printf '%s' "${ISLAND_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"; }
 codex_hooks()     { printf '%s' "${ISLAND_CODEX_HOOKS:-$HOME/.codex/hooks.json}"; }
@@ -56,7 +59,10 @@ _purge_config() {
     /^# >>> herdr-jump \(managed\) >>>/ { skip = 1 }
     skip && /^# <<< herdr-jump \(managed\) <<</ { skip = 0; next }
     skip { next }
-    /herdr-jump/ { next }
+    # ブロック外で消すのは agent_panel_sort の 1 行だけ。
+    # /herdr-jump/ のような素の部分一致にすると、利用者が書いた
+    # 「herdr-jump を試したが乗り換えた」のような無関係な行まで巻き込む
+    /^[[:space:]]*agent_panel_sort[[:space:]]*=.*#[[:space:]]*herdr-jump/ { next }
     { print }
   ' "$f" > "$tmp" && mv "$tmp" "$f" || rm -f "$tmp"
 }
