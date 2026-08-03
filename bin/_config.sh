@@ -30,8 +30,18 @@ island_edit_config() {
     return 1
   fi
 
-  cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S)" || { rm -rf "$work"; return 1; }
-  cat "$cand" > "$cfg" || { rm -rf "$work"; return 1; }
+  # バックアップ名はミリ秒まで含める。秒単位だと apply と revert を同じ秒に
+  # 実行したとき cp が先のバックアップを黙って上書きする（cp に -n は無い）
+  cp -p "$cfg" "$cfg.bak.$(date +%Y%m%d-%H%M%S-%3N)" || { rm -rf "$work"; return 1; }
+
+  # 置き換えはアトミックに。`cat "$cand" > "$cfg"` はリダイレクトの時点で
+  # $cfg を切り詰めるため、途中で失敗すると実 config が壊れたまま残る。
+  # mv がアトミックなのは同一ファイルシステム内だけなので、一時ファイルは
+  # /tmp ではなく config と同じディレクトリに作る
+  local stage; stage="$(mktemp "$(dirname "$cfg")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
+  cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
+  chmod --reference="$cfg" "$stage" 2>/dev/null
+  mv -f "$stage" "$cfg" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   rm -rf "$work"
 
   herdr server reload-config >/dev/null 2>&1
