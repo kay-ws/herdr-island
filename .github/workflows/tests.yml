@@ -37,15 +37,15 @@ jobs:
         run: bash tests/run.sh
 
   macos:
-    # まだ移植していない。宣言せずに黙って壊れているより、壊れ方を CI に
-    # 列挙させたいので走らせる。必須にはしない —— 常時赤は CI を見なくさせる。
-    # 既知の非互換は BSD userland との差 3 種:
-    #   mktemp -p / date %N / chmod --reference
-    # 移植が済んだら continue-on-error を外し、herdr-plugin.toml の
-    # platforms に macos を戻す。
-    name: macos (not yet supported — informational)
+    # 移植済み。必須ジョブなので、macOS 側の退行はここで止まる。
+    # 実際に踏んだ非互換は BSD userland との差 2 種だった:
+    #   wc -l が先頭を空白でパディングする（失敗 5 件はすべてこれ）
+    #   date の %N が GNU 拡張で展開されない
+    # 事前の静的解析で挙げた mktemp -p は macOS でも動作した（誤検出）。
+    # 読みで見つかるのは GNU 固有のフラグで、同じコマンドの出力書式の差は
+    # 走らせるまで分からない。
+    name: macos (supported)
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 

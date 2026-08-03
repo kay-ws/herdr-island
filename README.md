@@ -101,7 +101,7 @@ rows = [
 - herdr 0.7.5 or newer
 - `jq`
 - `python3` — used for the filter query only; the reporting hot path is shell plus the `herdr` CLI
-- Linux (macOS is not supported yet — the scripts rely on GNU `mktemp`, `date` and `chmod`)
+- Linux or macOS (both are exercised by CI on every push)
 
 No external Python packages, no toolchain, no build step.
 
