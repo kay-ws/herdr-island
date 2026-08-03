@@ -23,6 +23,11 @@ case "$1 $2" in
       echo "config: issues found"; exit 1
     fi
     echo "config: ok"; exit 0 ;;
+  "server reload-config")
+    # ISLAND_TEST_RELOAD=fail のときだけ失敗させる。herdr が起動していない
+    # 環境を模す
+    [ "${ISLAND_TEST_RELOAD:-ok}" = "fail" ] && exit 1
+    exit 0 ;;
 esac
 exit 0
 EOF
@@ -95,5 +100,27 @@ bash "$here/../bin/apply.sh" >/dev/null 2>&1
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
 assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" \
   "同一秒内の 2 回の編集でバックアップが 2 つ残る"
+
+# --- 元 config の権限を保つ ---
+# staging は mktemp で作るので 0600。権限を運ばないと利用者の config が
+# 黙って 0600 に締まる。chmod --reference は GNU 拡張なので使わない
+# （macOS では常に失敗し、握り潰しているので気づけない）
+mode_of() { ls -l "$1" | awk '{print substr($1,1,10)}'; }
+fresh
+chmod 640 "$CFG"
+bash "$here/../bin/apply.sh" >/dev/null 2>&1
+assert_eq "-rw-r-----" "$(mode_of "$CFG")" "apply は config の権限を保つ"
+bash "$here/../bin/revert.sh" >/dev/null 2>&1
+assert_eq "-rw-r-----" "$(mode_of "$CFG")" "revert も config の権限を保つ"
+
+# --- reload が失敗しても編集自体は成立と報告する ---
+# config は既に書けており呼び出し側から取り消せないので、ここで 1 を返すのは
+# 「編集が適用されなかった」という別の嘘になる。ただし黙るのも嘘なので警告は出す
+fresh
+err="$(ISLAND_TEST_RELOAD=fail bash "$here/../bin/apply.sh" 2>&1 >/dev/null)"
+rc=$?
+assert_eq "0" "$rc" "reload が失敗しても apply は 0"
+assert_contains "$err" "reload-config" "reload の失敗は警告として出す"
+assert_contains "$(cat "$CFG")" '$reason' "reload が失敗しても config は書けている"
 
 finish

@@ -12,6 +12,11 @@ export ISLAND_CODEX_HOOKS="$WORK/hooks.json"
 export ISLAND_CONFIG="$WORK/config.toml"
 export ISLAND_CCSTATUS="$WORK/ccstatus"
 
+# legacy.sh の $PAT の写し。legacy.sh は末尾の case で即座に実行するため
+# source できず、内部変数を参照できない。乖離しても判定が緩む方向にしか
+# 効かないよう、常に広い側（3 識別子すべて）を持つ
+LEGACY_PAT='herdr-jump|herdr-usage-push|herdr-codex-usage'
+
 seed() {
   cat > "$ISLAND_CLAUDE_SETTINGS" <<'EOF'
 {"hooks":{"PreToolUse":[
@@ -108,6 +113,8 @@ bash "$L" purge >/dev/null 2>&1
 assert_eq "0" "$?" "対象ファイルが無くても purge は 0"
 assert_eq "no" "$([ -f "$ISLAND_CODEX_HOOKS" ] && echo yes || echo no)" \
   "無いファイルを勝手に作らない"
+assert_eq "no" "$([ -f "$ISLAND_CCSTATUS" ] && echo yes || echo no)" \
+  "ccstatus も勝手に作らない"
 assert_eq "0" "$(grep -c 'herdr-jump' "$ISLAND_CONFIG")" \
   "一部が欠けていても残りのファイルは処理される"
 
@@ -137,5 +144,48 @@ done
 # --- 痕跡が無ければ detect は 10 ---
 bash "$L" detect >/dev/null 2>&1
 assert_eq "10" "$?" "痕跡が無ければ detect は 10"
+
+# --- 書き込み手順の性質 ---
+# 以下 3 区間は「purge が何を消すか」ではなく「どう書き戻すか」を見る。
+# いずれも自分で seed するので、上の区間の状態には依存しない
+
+# バックアップ名が同一秒でも衝突しないこと。
+# 秒単位の名前だと cp が先のバックアップを黙って上書きする（cp に -n は無い）
+seed
+rm -f "$ISLAND_CONFIG".bak.*
+bash "$L" purge >/dev/null 2>&1
+seed
+bash "$L" purge >/dev/null 2>&1
+assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" \
+  "同一秒内の 2 回の purge でバックアップが 2 つ残る"
+
+# 元ファイルの権限を保つこと。
+# ccstatus は利用者が実行する側のスクリプトなので、実行ビットを落とすと
+# ステータス行が黙って出なくなる。config も 0600 に締められると
+# 他のツールから読めなくなり得る
+mode_of() { ls -l "$1" | awk '{print substr($1,1,10)}'; }
+seed
+chmod 640 "$ISLAND_CONFIG"
+chmod 750 "$ISLAND_CCSTATUS"
+bash "$L" purge >/dev/null 2>&1
+assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CONFIG")"   "config の権限を保つ"
+assert_eq "-rwxr-x---" "$(mode_of "$ISLAND_CCSTATUS")" "ccstatus の実行ビットを保つ"
+
+# TMPDIR に依存しないこと。
+# 一時ファイルを $TMPDIR に作ると (a) mv が FS を跨いで非アトミックになり
+# (b) TMPDIR が使えない環境で mktemp が空を返し `> ""` で黙って素通りする。
+# 対象ファイルと同じディレクトリへ staging していればどちらも起きない。
+# 権限だけを見るテストでは「/tmp のまま cp -p を足す」不完全な修正も通るので、
+# 置き場所そのものを踏むこの区間が要る
+seed
+TMPDIR="$WORK/no-such-dir" bash "$L" purge >/dev/null 2>&1
+for f in "$ISLAND_CLAUDE_SETTINGS" "$ISLAND_CODEX_HOOKS" "$ISLAND_CONFIG" "$ISLAND_CCSTATUS"; do
+  assert_eq "0" "$(grep -cE "$LEGACY_PAT" "$f")" \
+    "TMPDIR が使えなくても $(basename "$f") から痕跡が消える"
+done
+
+# staging の残骸を置き去りにしないこと
+assert_eq "0" "$(find "$WORK" -name '.island-legacy.*' | wc -l | tr -d '[:space:]')" \
+  "staging ファイルを残さない"
 
 finish

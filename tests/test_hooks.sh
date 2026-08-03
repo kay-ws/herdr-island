@@ -93,8 +93,8 @@ assert_contains "$(bash "$H" status)" "codex: 3/3"  "status は codex の配線�
 
 cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
 echo '{}' > "$ISLAND_CODEX_HOOKS"
-assert_contains "$(bash "$H" status)" "codex: 0/3"  "codex 未配線を 0/2 と出す"
-assert_contains "$(bash "$H" status)" "claude: 3/3" "その時も claude は 2/2 のまま"
+assert_contains "$(bash "$H" status)" "codex: 0/3"  "codex 未配線を 0/3 と出す"
+assert_contains "$(bash "$H" status)" "claude: 3/3" "その時も claude は 3/3 のまま"
 assert_eq "3" "$(bash "$H" count)" "count は片方だけでも 3 のまま（status が要る理由）"
 
 rm -f "$ISLAND_CODEX_HOOKS"
@@ -116,5 +116,39 @@ orig="$(cat "$ISLAND_CLAUDE_SETTINGS")"
 bash "$H" install >/dev/null 2>&1
 assert_eq "1" "$?" "壊れた JSON では 1 を返す"
 assert_eq "$orig" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "壊れた JSON のファイルは変更しない"
+
+# --- 入れていないエージェントの設定ディレクトリを作らない ---
+# 以前は mkdir -p していたため、Codex を使っていない利用者のホームに
+# ~/.codex/ と {} が生え、status が codex: 0/3 と出た。「入れていない」と
+# 「入れたが未配線」が区別できず、doctor が何も診断できなくなる
+NOPE="$WORK/no-such-agent"          # 作らない
+mode_of() { ls -l "$1" | awk '{print substr($1,1,10)}'; }
+
+echo '{}' > "$ISLAND_CLAUDE_SETTINGS"
+ISLAND_CODEX_HOOKS="$NOPE/hooks.json" bash "$H" install >/dev/null 2>&1
+assert_eq "0" "$?" "片方が未導入でも install は成功する"
+assert_eq "no" "$([ -d "$NOPE" ] && echo yes || echo no)" \
+  "未導入エージェントの設定ディレクトリを作らない"
+assert_eq "3" "$(jq '[.hooks[]?[]?.hooks[]? | select(.command | test("island-reason"))] | length' \
+  "$ISLAND_CLAUDE_SETTINGS")" "導入済みの側は 3 本とも配線される"
+assert_contains "$(ISLAND_CODEX_HOOKS="$NOPE/hooks.json" bash "$H" status)" \
+  "codex: not installed" "status は未導入を未配線と別に出す"
+
+# 両方とも未導入なら、何も配線しなかったことを言う
+err="$(ISLAND_CLAUDE_SETTINGS="$NOPE/settings.json" ISLAND_CODEX_HOOKS="$NOPE/hooks.json" \
+  bash "$H" install 2>&1 >/dev/null)"
+assert_contains "$err" "nothing to wire" "両方未導入なら黙って 10 を返さない"
+assert_eq "no" "$([ -d "$NOPE" ] && echo yes || echo no)" \
+  "両方未導入でもディレクトリを作らない"
+
+# --- settings.json の権限を保つ ---
+# staging は mktemp で作るので 0600。chmod --reference は GNU 拡張で
+# macOS には無く、握り潰していたので静かに 0600 へ化けていた
+echo '{}' > "$ISLAND_CLAUDE_SETTINGS"
+chmod 640 "$ISLAND_CLAUDE_SETTINGS"
+bash "$H" install >/dev/null 2>&1
+assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "install は権限を保つ"
+bash "$H" uninstall >/dev/null 2>&1
+assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "uninstall も権限を保つ"
 
 finish

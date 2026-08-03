@@ -32,10 +32,15 @@ island_hook_cmd() {
   fi
 }
 
-# _wire <file> <install|uninstall> : rc 0=変更した / 10=変更不要 / 1=失敗
+# _wire <file> <install|uninstall> : rc 0=変更した / 10=変更不要 / 11=対象なし / 1=失敗
 _wire() {
   local f="$1" op="$2"
-  mkdir -p "$(dirname "$f")" 2>/dev/null || return 1
+  # 設定ディレクトリの有無を「そのエージェントが入っているか」の判定に使う。
+  # ここで mkdir -p すると Codex を使っていない利用者のホームに ~/.codex/ と
+  # {} が生え、以後 status が codex: 0/3 と出る —— 「入れていない」と
+  # 「入れたが未配線」が区別できなくなり、doctor が何も診断できない。
+  # 無いものは配線対象から外す（失敗ではない）
+  [ -d "$(dirname "$f")" ] || return 11
   [ -f "$f" ] || echo '{}' > "$f" || return 1
 
   # 壊れた JSON には触らない。jq が失敗した結果を書き戻すと被害が広がる
@@ -83,8 +88,11 @@ _wire() {
     || { rm -rf "$work"; return 1; }
   cp -p "$f" "$bak" || { rm -rf "$work"; return 1; }
   local stage; stage="$(mktemp "$(dirname "$f")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
+  # 権限は cp -p で運ぶ（bin/_config.sh と同じ理由）。chmod --reference は
+  # GNU 拡張で macOS には無く、握り潰していたため settings.json が
+  # 0600 に化けていた
+  cp -p "$f" "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
-  chmod --reference="$f" "$stage" 2>/dev/null
   mv -f "$stage" "$f" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   rm -rf "$work"
   return 0
@@ -113,7 +121,7 @@ _preflight_json() {
 # バックアップからの復元自体が失敗し得る書き込みであり、バックアップは
 # 利用者が自分で判断できるように残してあるものだから
 _wire_both() {
-  local op="$1" changed=1 rc
+  local op="$1" changed=1 rc skipped=0
   local files=("$(claude_settings)" "$(codex_hooks)")
   local f wrote=()
 
@@ -134,8 +142,15 @@ _wire_both() {
       fi
       return 1
     fi
+    [ "$rc" -eq 11 ] && skipped=$((skipped + 1))
     [ "$rc" -eq 0 ] && { changed=0; wrote+=("$f"); }
   done
+  # 全部が「そのエージェントは入っていない」で飛ばされた場合。rc 10 のまま
+  # 返すと「もう配線済み」と区別がつかないので、何も配線しなかったことを言う
+  if [ "$skipped" -eq "${#files[@]}" ]; then
+    echo "no agent config directory found — nothing to wire." \
+      "Looked for $(dirname "${files[0]}") and $(dirname "${files[1]}")." >&2
+  fi
   [ "$changed" -eq 0 ] && return 0
   return 10
 }
@@ -181,6 +196,13 @@ island_hooks_status() {
   for i in 0 1; do
     f="${files[$i]}"
     label="${labels[$i]}"
+    # ディレクトリの有無で「未導入」と「導入済みだが未配線」を分ける。
+    # island は ~/.codex/ を作らないので、無いことがそのまま
+    # 「Codex を使っていない」の意味になる（診断すべきことが無い）
+    if [ ! -d "$(dirname "$f")" ]; then
+      printf '%s: not installed\n' "$label"
+      continue
+    fi
     if [ ! -f "$f" ]; then
       printf '%s: file missing\n' "$label"
       continue

@@ -167,4 +167,56 @@ rows = [
 ]
 '
 
+# --- ISLAND_REASON_FG: 色をまたいでも往復すること ---
+# 色を指定して apply した config を、指定せずに revert する経路。照合を
+# 完全一致でやっていた頃は ROW_TEXT が一致せず rc 10（変更不要）が返り、
+# 行が config に取り残された —— 利用者から見ると「revert したのに消えない」で、
+# 消すには当時の環境変数を思い出す必要がある。同一性の根拠は色ではなく
+# token = "$reason" の方なので、fg の値は照合から外してある。
+# 5 つの挿入形すべてで確かめる（形ごとに前後の文脈が違い、緩めた正規表現が
+# 効くかは形ごとに独立に壊れ得る）
+cross_color() {
+  local name="$1" body="$2"
+  local orig="$WORK/$name.cc.toml"
+  printf '%s' "$body" > "$orig"
+
+  ISLAND_REASON_FG='#00ff00' python3 "$R" add "$orig" > "$WORK/$name.cc.added"
+  assert_contains "$(cat "$WORK/$name.cc.added")" '#00ff00' "$name: 指定した色で入る"
+
+  # 色違いで既に入っているものを二重に足さない
+  ISLAND_REASON_FG='#123456' python3 "$R" add "$WORK/$name.cc.added" >/dev/null 2>&1
+  assert_eq "10" "$?" "$name: 色違いで入っていても add は 10"
+
+  # 環境変数を指定せずに remove（= 既定色で照合される）
+  python3 "$R" remove "$WORK/$name.cc.added" > "$WORK/$name.cc.back"
+  assert_eq "0" "$?" "$name: 色違いでも remove は 0"
+  assert_eq "0" "$(cmp -s "$orig" "$WORK/$name.cc.back" && echo 0 || echo 1)" \
+    "$name: 色を指定して add -> 指定せず remove で元とバイト一致"
+}
+
+cross_color cc_multiline '[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace"],
+  ["agent"],
+]
+'
+cross_color cc_multiline_no_comma '[ui.sidebar.agents]
+rows = [
+  ["state_icon", "workspace"],
+  ["agent"]
+]
+'
+cross_color cc_inline '[ui.sidebar.agents]
+rows = [["state_icon", "workspace"], ["agent"]]
+'
+cross_color cc_empty '[ui.sidebar.agents]
+rows = []
+'
+cross_color cc_table_no_rows '[ui.sidebar.agents]
+row_gap = 0
+'
+cross_color cc_absent '[ui]
+sidebar_width = 30
+'
+
 finish

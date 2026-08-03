@@ -45,11 +45,23 @@ island_edit_config() {
   # mv がアトミックなのは同一ファイルシステム内だけなので、一時ファイルは
   # /tmp ではなく config と同じディレクトリに作る
   local stage; stage="$(mktemp "$(dirname "$cfg")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
+  # 権限は cp -p で運ぶ。mktemp は 0600 で作るので、そのまま置くと利用者の
+  # config が 0600 に締まる。chmod --reference は使わない —— GNU 拡張で
+  # macOS の chmod には無く、2>/dev/null で握り潰しているため
+  # 「macOS では常に失敗して静かに 0600 のまま置く」経路になっていた。
+  # cp -p なら両方の userland で同じ 1 本の経路で済む
+  cp -p "$cfg" "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
-  chmod --reference="$cfg" "$stage" 2>/dev/null
   mv -f "$stage" "$cfg" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   rm -rf "$work"
 
-  herdr server reload-config >/dev/null 2>&1
+  # reload の失敗で rc は変えない。config は既に書けており、それは呼び出し側から
+  # 取り消せない —— ここで 1 を返すと「編集が適用されなかった」という別の嘘になる。
+  # herdr が起動していないときにも普通に失敗するので、鵜呑みにできる情報でもない。
+  # ただし黙るのも嘘なので、反映されていないことは警告として出す
+  if ! herdr server reload-config >/dev/null 2>&1; then
+    echo "warning: config updated, but 'herdr server reload-config' failed." \
+         "The change takes effect the next time herdr loads its config." >&2
+  fi
   return 0
 }

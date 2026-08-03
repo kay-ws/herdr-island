@@ -55,6 +55,30 @@ MULTILINE_INSERT_NO_COMMA = ",\n  %s" % ROW_TEXT
 # ケース B: 1 行の rows
 INLINE_INSERT = ", %s" % ROW_TEXT
 
+# 照合は fg の値を問わない。
+#
+# ROW_TEXT は ISLAND_REASON_FG で色が変わる。完全一致だけで照合すると、
+# 色を指定して apply した config を、指定せずに revert したときに一致せず
+# rc 10（変更不要）が返り、行が config に取り残される —— 利用者から見ると
+# 「revert したのに消えない」で、しかも消すには当時の環境変数を思い出す
+# 必要がある。同じ理由で add も二重に足してしまう。
+#
+# 同一性の根拠は色ではなく token = "$reason" の方なので、fg の値だけを
+# 任意に許す。5 つの挿入形すべてが ROW_TEXT をちょうど 1 回含むので、
+# 形ごとにテンプレートを二重管理せず、そこだけを差し替えれば足りる
+ROW_LAX_SRC = (
+    re.escape('[{ token = "$reason", fg = "')
+    + r'[^"]*'
+    + re.escape('", bold = true }]')
+)
+
+
+def _lax(chunk):
+    """chunk 中の ROW_TEXT を「fg の値は何でもよい」形に緩めた正規表現。"""
+    head, _, tail = chunk.partition(ROW_TEXT)
+    return re.compile(re.escape(head) + ROW_LAX_SRC + re.escape(tail))
+
+
 # rows = [ から対応する ] までを掴む。行頭の rows のみを対象にする
 ROWS_RE = re.compile(r"(?m)^([ \t]*)rows[ \t]*=[ \t]*\[")
 
@@ -124,8 +148,8 @@ def _insert_after_line(text, pos):
 
 
 def add(text):
-    if ROW_TEXT in text:
-        return None  # 冪等
+    if _lax(ROW_TEXT).search(text):
+        return None  # 冪等。色違いで入っていても「もうある」と見る
     table = agents_table_span(text)
     if table is None:
         # ケース C: テーブルごと無い
@@ -199,9 +223,10 @@ def remove(text):
         INLINE_INSERT,
         ROW_TEXT,
     ):
-        if chunk in text:
-            return text.replace(chunk, "", 1)
-    return None  # 自分が入れた形と完全一致するものが無い
+        m = _lax(chunk).search(text)
+        if m:
+            return text[: m.start()] + text[m.end() :]
+    return None  # 自分が入れた形と一致するものが無い
 
 
 def main():

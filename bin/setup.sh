@@ -61,8 +61,9 @@ fi
 # 4. agent CLI 側の hook 配線
 echo
 echo "To capture stop reasons, a hook must be wired into Claude Code / Codex."
-echo "  Targets: PermissionRequest (all tools) and PreToolUse (AskUserQuestion only)"
-echo "  The clearing side is not wired here (herdr's own event handles that)."
+echo "  Sets the reason: PermissionRequest (all tools), PreToolUse (AskUserQuestion only)"
+echo "  Clears it:       PostToolUse (all tools)"
+echo "  Only agents you already have are wired — Island never creates a config directory."
 echo
 if confirm "Wire the hook?"; then
   bash "$root/lib/hooks.sh" install
