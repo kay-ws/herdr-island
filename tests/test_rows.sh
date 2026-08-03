@@ -22,7 +22,18 @@ roundtrip() {
     "$name: add -> remove で元とバイト一致"
 }
 
-# --- ケース A: 複数行の rows ---
+# assert_toml_valid <ファイル> <メッセージ> : stdlib tomllib で read-only parse できることを確かめる
+assert_toml_valid() {
+  local file="$1" msg="$2"
+  if python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' "$file" 2>/dev/null; then
+    printf 'ok   %s\n' "$msg"
+  else
+    printf 'FAIL %s\n  %q は有効な TOML でない\n' "$msg" "$file" >&2
+    _fail=1
+  fi
+}
+
+# --- ケース A1: 複数行の rows、末尾カンマ「あり」 ---
 roundtrip multiline '[ui.sidebar.agents]
 row_gap = 0
 rows = [
@@ -31,10 +42,34 @@ rows = [
 ]
 '
 
+# --- ケース A2 (I2): 複数行の rows、末尾カンマ「無し」 ---
+# 末尾カンマの無い配列は珍しくないスタイルで、README のサンプル自体も
+# たまたま末尾カンマ付きなだけ。ここに区切りカンマを補わないと
+# ["agent"] の直後に次要素が続き、無効な TOML を吐いて apply が失敗する。
+roundtrip multiline_no_comma '[ui.sidebar.agents]
+row_gap = 0
+rows = [
+  ["state_icon", "workspace"],
+  ["agent"]
+]
+'
+assert_toml_valid "$WORK/multiline_no_comma.added" \
+  "multiline_no_comma: add 後が有効な TOML（I2 の直接検出）"
+
 # --- ケース B: 1 行の rows ---
 roundtrip inline '[ui.sidebar.agents]
 rows = [["state_icon", "workspace"], ["agent"]]
 '
+
+# --- ケース D (I3): テーブルはあるが rows キーが無い ---
+# bin/setup.sh が警告する「rows_by_agent だけを設定している」利用者と同じ
+# 状態。BLOCK をそのまま追記すると [ui.sidebar.agents] を二重定義して
+# config check に落ちる。
+roundtrip table_no_rows '[ui.sidebar.agents]
+row_gap = 0
+'
+assert_toml_valid "$WORK/table_no_rows.added" \
+  "table_no_rows: add 後が有効な TOML"
 
 # --- ケース C: テーブルが無い ---
 roundtrip absent '[ui]
@@ -98,7 +133,7 @@ agents_line="$(grep -n 'ui.sidebar.agents' -A1 "$WORK/other.added" | tail -1)"
 assert_eq "yes" "$(printf '%s' "$agents_line" | grep -qF 'reason' && echo yes || echo no)" \
   "agents テーブルの rows に入る"
 
-# --- 子テーブルの rows を掴まないこと ---
+# --- 子テーブルの rows を掴まないこと（かつ I3 の実例：rows キー不在） ---
 cat > "$WORK/child.toml" <<'EOF'
 [ui.sidebar.agents]
 row_gap = 0
@@ -107,7 +142,12 @@ row_gap = 0
 claude = [["agent"]]
 EOF
 python3 "$R" add "$WORK/child.toml" > "$WORK/child.added"
+assert_eq "0" "$?" "child: rows_by_agent だけの config でも add は 0"
 assert_eq "no" "$(grep -A2 'rows_by_agent' "$WORK/child.added" | grep -qF 'reason' && echo yes || echo no)" \
   "rows_by_agent の中には絶対に入れない"
+assert_toml_valid "$WORK/child.added" "child: add 後が有効な TOML"
+python3 "$R" remove "$WORK/child.added" > "$WORK/child.back"
+assert_eq "0" "$(cmp -s "$WORK/child.toml" "$WORK/child.back" && echo 0 || echo 1)" \
+  "child: add -> remove で元とバイト一致"
 
 finish

@@ -69,6 +69,8 @@ The filter is a declarative view: it does not rewrite your configuration, and it
 
 That is the whole footprint. Island owns exactly one metadata token, `$reason`, and **never writes `ui.sidebar.agents.rows_by_agent`** — that key is a complete override in herdr, so setting it makes `rows` unreachable for the listed agents and would silently disable other plugins' rows.
 
+If `ui.sidebar.agents.rows` already exists, that one row is all Island adds. If it does not — no rows array at all, or a `[ui.sidebar.agents]` table with no `rows` key — there is nothing to append its row to, so Island materializes herdr's own default rows (state icon, workspace, agent name) alongside its own. `rows` is all-or-nothing in herdr; writing an array holding only Island's row would silently drop those defaults instead of adding to them.
+
 Only the *setting* side is wired into your agent's hooks. Clearing happens on herdr's own `pane.agent_status_changed` event, which means one clear path instead of several, and half as much wiring in configuration you own.
 
 `island.remove` undoes each step, confirming each separately.
@@ -90,7 +92,7 @@ rows = [
 ]
 ```
 
-`island.apply` inserts its row into an existing `rows` array rather than replacing the table, so installing Island after Agent Usage leaves the Agent Usage rows intact. If `rows_by_agent` is present, setup warns you — that key would make the added row invisible with no error from herdr.
+`island.apply` inserts its row into an existing `rows` array rather than replacing the table, so installing Island after Agent Usage leaves the Agent Usage rows intact. (This only applies once a `rows` array exists — see the note above for what happens when it does not.) If `rows_by_agent` is present, setup warns you — that key would make the added row invisible with no error from herdr.
 
 ## Requirements
 
