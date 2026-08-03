@@ -479,11 +479,18 @@ EOF
 chmod +x "$WORK/bin/herdr"
 export PATH="$WORK/bin:$PATH"
 export FAKE_HERDR_LOG="$WORK/herdr.log"
+export FAKE_CHECKED_PATH_LOG="$WORK/checked_path.log"
 
 CFG="$WORK/config.toml"
 export ISLAND_CONFIG="$CFG"
 
-fresh() { printf '[ui.sidebar.agents]\nrows = [["agent"]]\n' > "$CFG"; : > "$FAKE_HERDR_LOG"; }
+# バックアップも消すこと。$WORK は全区間で共有されるので、消さないと
+# バックアップ数を数えるアサーションが前の区間の残骸を拾う
+fresh() {
+  printf '[ui.sidebar.agents]\nrows = [["agent"]]\n' > "$CFG"
+  : > "$FAKE_HERDR_LOG"
+  rm -f "$CFG".bak.*
+}
 
 # --- 正常系 ---
 fresh
@@ -503,13 +510,6 @@ assert_eq "no" "$([ "$checked" = "$CFG" ] && echo yes || echo no)" \
   "検証対象は実 config ではない"
 assert_eq "no" "$([ "$checked" = "UNSET" ] && echo yes || echo no)" \
   "HERDR_CONFIG_PATH を設定して検証している"
-
-# --- バックアップ名が同一秒でも衝突しないこと ---
-fresh
-bash "$here/../bin/apply.sh" >/dev/null 2>&1
-bash "$here/../bin/revert.sh" >/dev/null 2>&1
-assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" \
-  "同一秒内の 2 回の編集でバックアップが 2 つ残る"
 
 # --- 冪等 ---
 : > "$FAKE_HERDR_LOG"
@@ -534,6 +534,17 @@ bash "$here/../bin/apply.sh" >/dev/null 2>&1
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
 assert_eq "0" "$?" "revert は 0 を返す"
 assert_eq "$orig" "$(cat "$CFG")" "revert で元とバイト一致"
+
+# --- バックアップ名が同一秒でも衝突しないこと ---
+#
+# この区間は最後に置く。config を revert 済みの状態で終えるため、途中に
+# 挟むと後続区間（$reason がある前提の「冪等」など）の前提を壊す。
+# 各区間が暗黙に前の区間の状態を引き継ぐテストなので、追加は末尾が安全。
+fresh
+bash "$here/../bin/apply.sh" >/dev/null 2>&1
+bash "$here/../bin/revert.sh" >/dev/null 2>&1
+assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" \
+  "同一秒内の 2 回の編集でバックアップが 2 つ残る"
 
 finish
 ```
