@@ -23,7 +23,8 @@ for c in herdr jq python3; do
 done
 
 echo "hook の配線:"
-echo "  配線済みエントリ数: $(bash "$root/lib/hooks.sh" count)（配線済みなら 2）"
+# エージェントごとに出す。合算値だと「片方だけ配線済み」が見えない
+bash "$root/lib/hooks.sh" status | while IFS= read -r line; do echo "  $line"; done
 
 echo "絞り込み:"
 [ -f "${HERDR_PLUGIN_STATE_DIR:-/nonexistent}/view.json" ] \

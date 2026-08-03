@@ -97,9 +97,35 @@ island_hooks_count() {
   } | sort -u | wc -l
 }
 
+# エージェントごとの配線状況を 1 行ずつ出す。
+# count は両ファイルの和集合なので「Claude だけ配線済み」でも 2 を返し、
+# doctor が最も知りたい部分配線を映せない。診断はこちらを使う
+island_hooks_status() {
+  # ラベルはファイルの中身/パスではなく「何番目に処理したか」で決める。
+  # パスの部分一致（*codex*）で判定すると、ISLAND_CODEX_HOOKS が
+  # "hooks.json" のような "codex" を含まない名前のとき（テスト fixture が
+  # まさにこの形）両方 claude に化ける。呼び出し順は claude → codex で固定
+  # なので、位置で決めれば環境変数の値に依存しない。
+  local files=("$(claude_settings)" "$(codex_hooks)")
+  local labels=(claude codex)
+  local i f label c
+  for i in 0 1; do
+    f="${files[$i]}"
+    label="${labels[$i]}"
+    if [ ! -f "$f" ]; then
+      printf '%s: ファイル無し\n' "$label"
+      continue
+    fi
+    c="$(jq -r '[ (.hooks // {}) | to_entries[] | .key as $event | .value[]? | select(.hooks[]?.command // "" | test("island-reason")) | $event + ":" + (.matcher // "") ] | unique | length' "$f" 2>/dev/null)"
+    [ -n "$c" ] || c=0
+    printf '%s: %s/2\n' "$label" "$c"
+  done
+}
+
 case "${1:-}" in
   install)   island_hooks_install ;;
   uninstall) island_hooks_uninstall ;;
   count)     island_hooks_count ;;
-  *) echo "usage: hooks.sh {install|uninstall|count}" >&2; exit 1 ;;
+  status)    island_hooks_status ;;
+  *) echo "usage: hooks.sh {install|uninstall|count|status}" >&2; exit 1 ;;
 esac

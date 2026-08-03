@@ -55,7 +55,23 @@ assert_eq "10" "$?" "2 回目の install は 10"
 assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
 
 # --- count ---
-assert_eq "2" "$(bash "$H" count)" "count は配線済みエントリ数を返す"
+assert_eq "2" "$(bash "$H" count)" "count は配線済みスロット数を返す"
+
+# --- status: 部分配線を区別できること ---
+# count は両ファイルの和集合なので、片方だけ配線済みでも 2 を返す。
+# doctor が最も知りたい「どちらが未配線か」を出せるのは status だけ
+assert_contains "$(bash "$H" status)" "claude: 2/2" "status は claude の配線数を出す"
+assert_contains "$(bash "$H" status)" "codex: 2/2"  "status は codex の配線数を出す"
+
+cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
+echo '{}' > "$ISLAND_CODEX_HOOKS"
+assert_contains "$(bash "$H" status)" "codex: 0/2"  "codex 未配線を 0/2 と出す"
+assert_contains "$(bash "$H" status)" "claude: 2/2" "その時も claude は 2/2 のまま"
+assert_eq "2" "$(bash "$H" count)" "count は片方だけでも 2 のまま（status が要る理由）"
+
+rm -f "$ISLAND_CODEX_HOOKS"
+assert_contains "$(bash "$H" status)" "codex: ファイル無し" "ファイル自体が無い場合を区別する"
+mv "$ISLAND_CODEX_HOOKS.keep" "$ISLAND_CODEX_HOOKS"
 
 # --- uninstall ---
 bash "$H" uninstall >/dev/null 2>&1
