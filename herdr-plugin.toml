@@ -1,0 +1,59 @@
+id = "island"
+name = "Island"
+version = "1.0.0"
+min_herdr_version = "0.7.5"
+description = "Find the agents that are waiting on you. Shows why each agent stopped, and filters the Agents panel down to just those."
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "setup"
+title = "Set up Island"
+placement = "popup"
+width = "80%"
+height = 20
+command = ["bash", "bin/setup.sh"]
+
+[[panes]]
+id = "remove"
+title = "Remove Island"
+placement = "popup"
+width = "80%"
+height = 20
+command = ["bash", "bin/remove.sh"]
+
+[[actions]]
+id = "focus"
+title = "Show only agents waiting on you"
+contexts = ["workspace", "pane"]
+command = ["bash", "bin/focus.sh"]
+
+[[actions]]
+id = "unfocus"
+title = "Show all agents"
+contexts = ["workspace", "pane"]
+command = ["bash", "bin/unfocus.sh"]
+
+[[actions]]
+id = "apply"
+title = "Add the reason row to config (no prompt)"
+contexts = ["workspace"]
+command = ["bash", "bin/apply.sh"]
+
+[[actions]]
+id = "revert"
+title = "Remove the reason row from config (no prompt)"
+contexts = ["workspace"]
+command = ["bash", "bin/revert.sh"]
+
+[[actions]]
+id = "doctor"
+title = "Diagnose Island"
+contexts = ["workspace"]
+command = ["bash", "bin/doctor.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "bin/on-status-changed.sh"]
+
+[[startup]]
+command = ["bash", "bin/startup.sh"]
