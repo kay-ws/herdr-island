@@ -68,6 +68,13 @@ assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変�
 # --- count ---
 assert_eq "2" "$(bash "$H" count)" "count は配線済みスロット数を返す"
 
+# 出力が「裸の数値」であること。BSD/macOS の wc -l は先頭を空白で
+# パディングするため、値が正しくても文字列比較する呼び出し側で落ちる。
+# 実際 CI の macOS ジョブはこれで 5 アサーション落ちた
+c="$(bash "$H" count)"
+assert_eq "yes" "$(printf '%s' "$c" | grep -qE '^[0-9]+$' && echo yes || echo no)" \
+  "count の出力に空白が混じらない（BSD の wc -l 対策）"
+
 # --- status: 部分配線を区別できること ---
 # count は両ファイルの和集合なので、片方だけ配線済みでも 2 を返す。
 # doctor が最も知りたい「どちらが未配線か」を出せるのは status だけ

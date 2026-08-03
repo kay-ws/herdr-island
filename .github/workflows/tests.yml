@@ -11,7 +11,7 @@ jobs:
     name: linux (supported)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 2 つのテストが実物の herdr を要求する:
       #   test_manifest.sh  … herdr plugin link でマニフェストを検証させる
@@ -47,7 +47,7 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install herdr
         run: |

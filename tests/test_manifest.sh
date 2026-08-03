@@ -20,7 +20,8 @@ herdr plugin unlink island >/dev/null 2>&1
 # 検出して警告することは Task 8 の要件そのものなので、文字列としての言及
 # （grep での検出・警告文）まで禁じると要件と矛盾する。禁じるのはあくまで
 # TOML への代入形（`rows_by_agent = ...`）で、これが無ければ書き込んでいない
-hits="$(grep -rlE 'rows_by_agent[[:space:]]*=' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l)"
+# wc -l は BSD/macOS で空白パディングされるため数値へ正規化する
+hits="$(grep -rlE 'rows_by_agent[[:space:]]*=' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l | tr -d '[:space:]')"
 assert_eq "0" "$hits" "bin/ lib/ は rows_by_agent へ書き込まない（代入形が無い）"
 
 finish

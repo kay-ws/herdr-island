@@ -136,7 +136,9 @@ island_hooks_count() {
         | $event + ":" + (.matcher // "")
       ' "$f" 2>/dev/null
     done
-  } | sort -u | wc -l
+  # wc -l は BSD/macOS では先頭を空白でパディングする（"       2"）。
+  # 値は正しくても文字列比較に使う側で落ちるので、ここで数値へ正規化する
+  } | sort -u | wc -l | tr -d '[:space:]'
 }
 
 # エージェントごとの配線状況を 1 行ずつ出す。

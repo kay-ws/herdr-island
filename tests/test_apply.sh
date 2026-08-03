@@ -51,7 +51,7 @@ assert_contains "$(cat "$FAKE_HERDR_LOG")" "config check" "本番へ置く前に
 assert_contains "$(cat "$FAKE_HERDR_LOG")" "server reload-config" "反映は reload-config"
 assert_eq "no" "$(grep -q 'server restart' "$FAKE_HERDR_LOG" && echo yes || echo no)" \
   "restart は呼ばない"
-assert_eq "1" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" "バックアップを 1 つ取る"
+assert_eq "1" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" "バックアップを 1 つ取る"
 
 # 検証したのは候補ファイルであって実 config ではないこと。
 # これが実 config を指していたら、ゲートは常に通り何も守っていない
@@ -93,7 +93,7 @@ assert_eq "$orig" "$(cat "$CFG")" "revert で元とバイト一致"
 fresh
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
-assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l)" \
+assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" \
   "同一秒内の 2 回の編集でバックアップが 2 つ残る"
 
 finish
