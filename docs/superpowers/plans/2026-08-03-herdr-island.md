@@ -1067,6 +1067,9 @@ assert_eq "plugin:island"   "$(sent '.params.source')" "source は plugin:island
 assert_eq "exists"          "$(sent '.params.filter.op')"           "filter は exists"
 assert_eq "reason"          "$(sent '.params.filter.field.token')"  "reason トークンの有無で絞る"
 assert_eq "attention"       "$(sent '.params.sort[0].field')"       "attention 優先で並べる"
+assert_eq "desc"            "$(sent '.params.sort[0].order')"       "attention は降順"
+assert_eq "state_change_seq" "$(sent '.params.sort[1].field')"      "次に直近の状態遷移で並べる"
+assert_eq "desc"            "$(sent '.params.sort[1].order')"       "state_change_seq も降順"
 assert_eq "yes" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || echo no)" \
   "state に保存する"
 
@@ -1074,6 +1077,11 @@ assert_eq "yes" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || ech
 reset_capture
 bash "$here/../bin/startup.sh" >/dev/null 2>&1
 assert_eq "agent.view.set" "$(sent '.method')" "startup は保存済み view を再適用する"
+# method だけ見ると、params を落とした restore でも通ってしまう
+assert_eq "plugin:island" "$(sent '.params.source')"       "restore も source を forward する"
+assert_eq "exists"        "$(sent '.params.filter.op')"    "restore も filter を forward する"
+assert_eq "reason"        "$(sent '.params.filter.field.token')" "restore も filter の token を forward する"
+assert_eq "2"             "$(sent '.params.sort | length')" "restore も sort を 2 件 forward する"
 
 # --- clear ---
 reset_capture
@@ -1089,9 +1097,21 @@ reset_capture
 bash "$here/../bin/startup.sh" >/dev/null 2>&1
 assert_eq "yes" "$(nothing_sent)" "保存が無ければ startup は何も送らない"
 
-# --- socket が無くても落ちない ---
+# --- socket が到達不能なら state を書かない ---
+# exit code だけ見るテストは、この不整合に対して無力だった。
+# 送信していないのに state を書くと startup が「一度も適用されていない
+# view」を毎回復元しにいく
+rm -f "$HERDR_PLUGIN_STATE_DIR/view.json"
+reset_capture
 HERDR_SOCKET_PATH=/nonexistent/sock python3 "$V" set >/dev/null 2>&1
-assert_eq "0" "$?" "socket が繋がらなくても 0 で抜ける"
+assert_eq "1" "$?" "socket が繋がらなければ 1 を返す"
+assert_eq "yes" "$(nothing_sent)" "到達不能なら何も送られていない"
+assert_eq "no" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || echo no)" \
+  "送信できなかったときは state を書かない"
+
+# --- startup は socket が無くても exit 0（サーバ起動のたびに走るため） ---
+HERDR_SOCKET_PATH=/nonexistent/sock bash "$here/../bin/startup.sh" >/dev/null 2>&1
+assert_eq "0" "$?" "startup は socket が無くても exit 0"
 
 finish
 ```
@@ -1156,15 +1176,24 @@ def main():
     op = sys.argv[1] if len(sys.argv) > 1 else ""
     sf = state_file()
 
+    # state ファイルの意味は「サーバに実際に伝えた内容」であって
+    # 「ユーザーが望んでいる状態」ではない。restore の役目はサーバ再起動で
+    # 消えた view の復元なので、一度も適用されていない view を保存すると
+    # restore が嘘をつく（herdr 未起動時に focus を叩いた人が、次回起動時に
+    # 理由の分からない絞り込み画面に出会う）。よって送信成功時のみ更新する。
     if op == "set":
-        send("agent.view.set", PARAMS)
+        if not send("agent.view.set", PARAMS):
+            sys.stderr.write("herdr へ送信できませんでした\n")
+            return 1
         if sf:
             with open(sf, "w", encoding="utf-8") as f:
                 json.dump(PARAMS, f)
         return 0
 
     if op == "clear":
-        send("agent.view.clear", {"source": SOURCE})
+        if not send("agent.view.clear", {"source": SOURCE}):
+            sys.stderr.write("herdr へ送信できませんでした\n")
+            return 1
         if sf and os.path.exists(sf):
             os.remove(sf)
         return 0
@@ -1193,8 +1222,12 @@ if __name__ == "__main__":
 #!/bin/bash
 set -uo pipefail
 root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-python3 "$root/lib/view.py" set
-echo "待っているエージェントだけを表示します。"
+if python3 "$root/lib/view.py" set; then
+  echo "待っているエージェントだけを表示します。"
+else
+  echo "絞り込みを適用できませんでした（herdr に接続できません）。" >&2
+  exit 1
+fi
 ```
 
 `bin/unfocus.sh`:
@@ -1203,8 +1236,12 @@ echo "待っているエージェントだけを表示します。"
 #!/bin/bash
 set -uo pipefail
 root="${HERDR_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-python3 "$root/lib/view.py" clear
-echo "すべてのエージェントを表示します。"
+if python3 "$root/lib/view.py" clear; then
+  echo "すべてのエージェントを表示します。"
+else
+  echo "絞り込みを解除できませんでした（herdr に接続できません）。" >&2
+  exit 1
+fi
 ```
 
 `bin/startup.sh`:
