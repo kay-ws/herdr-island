@@ -1794,12 +1794,16 @@ island_hooks_count() {
 # count は両ファイルの和集合なので「Claude だけ配線済み」でも 2 を返し、
 # doctor が最も知りたい部分配線を映せない。診断はこちらを使う
 island_hooks_status() {
-  local f label c
-  for f in "$(claude_settings)" "$(codex_hooks)"; do
-    case "$f" in
-      *codex*) label=codex ;;
-      *)       label=claude ;;
-    esac
+  # ラベルはパスの部分一致ではなく「何番目に処理したか」で決める。
+  # ISLAND_CODEX_HOOKS は任意のパスを取れるので、*codex* での判定は
+  # "hooks.json" のような名前（テスト fixture がまさにこの形）で
+  # 両方 claude に化ける。呼び出し順は claude → codex で固定
+  local files=("$(claude_settings)" "$(codex_hooks)")
+  local labels=(claude codex)
+  local i f label c
+  for i in 0 1; do
+    f="${files[$i]}"
+    label="${labels[$i]}"
     if [ ! -f "$f" ]; then
       printf '%s: ファイル無し\n' "$label"
       continue
