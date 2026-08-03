@@ -16,8 +16,11 @@ out="$(herdr plugin link "$here/.." 2>&1)"
 assert_contains "$out" '"plugin_id":"island"' "id は island"
 herdr plugin unlink island >/dev/null 2>&1
 
-# rows_by_agent への言及がリポジトリに残っていないこと（Global Constraints）
-hits="$(grep -rl 'rows_by_agent' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l)"
-assert_eq "0" "$hits" "bin/ lib/ は rows_by_agent を書かない"
+# rows_by_agent への「書き込み」がリポジトリに無いこと（Global Constraints）。
+# 検出して警告することは Task 8 の要件そのものなので、文字列としての言及
+# （grep での検出・警告文）まで禁じると要件と矛盾する。禁じるのはあくまで
+# TOML への代入形（`rows_by_agent = ...`）で、これが無ければ書き込んでいない
+hits="$(grep -rlE 'rows_by_agent[[:space:]]*=' "$here/../bin" "$here/../lib" 2>/dev/null | wc -l)"
+assert_eq "0" "$hits" "bin/ lib/ は rows_by_agent へ書き込まない（代入形が無い）"
 
 finish
