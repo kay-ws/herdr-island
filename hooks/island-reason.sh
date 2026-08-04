@@ -1,33 +1,34 @@
 #!/bin/bash
-# herdr Agents パネルに「何で止まっているか」を出す。
+# Show "what is this agent stuck on" in herdr's Agents panel.
 #
-#   引数なし … 理由を立てる（PermissionRequest / PreToolUse(AskUserQuestion)）
-#   clear    … 理由を消す（PostToolUse）
+#   no argument … set the reason (PermissionRequest / PreToolUse(AskUserQuestion))
+#   clear       … clear the reason (PostToolUse)
 #
-# clear がここに戻っているのは、セット側とクリア側の契機を対にするため。
-# プラグイン側の pane.agent_status_changed でも消しているが、あれは
-# 「状態が遷移したとき」しか発火しない。auto mode で自動承認された許可要求は
-# エージェントを blocked にしないため遷移が起きず、セットだけが起きて
-# クリアが起きない（TTL 15 分まで残る）。ツールの完了は必ず起きるので、
-# PostToolUse なら確実に対になる。
+# clear lives here so that the set and clear triggers form a pair. The plugin
+# also clears on pane.agent_status_changed, but that only fires on a state
+# *transition*. A permission request auto-approved in auto mode never puts the
+# agent into blocked, so no transition happens: the set fires and the clear does
+# not, and the reason lingers for the full 15-minute TTL. Tool completion always
+# happens, so PostToolUse is a reliable counterpart.
 #
-# ただし戻すのは PostToolUse の 1 本だけ。旧実装は PostToolBatch / Stop / TTL の
-# 3 経路で消しており、手で送った理由が即座に消えて目視確認ができなかった。
+# Only that one PostToolUse path comes back, though. The old implementation
+# cleared through three paths — PostToolBatch / Stop / TTL — which made a reason
+# sent by hand disappear instantly, so you could never eyeball it.
 #
-# 何があっても exit 0 する。表示が出ないのは許容できるが、
-# 非ゼロ終了でエージェントの動作に影響を与えるのは許容できない。
+# Always exit 0, no matter what. Losing the display is acceptable; affecting the
+# agent's own behaviour with a non-zero exit is not.
 
 mode="${1:-set}"
 [ "$mode" = "set" ] || [ "$mode" = "clear" ] || exit 0
 
-# ガード。herdr のペイン内で起動されたプロセスだけが通る
+# Guards — only a process launched inside a herdr pane gets past these
 [ "${HERDR_ENV:-}" = "1" ]      || exit 0
 [ -n "${HERDR_PANE_ID:-}" ]     || exit 0
 command -v jq    >/dev/null 2>&1 || exit 0
 command -v herdr >/dev/null 2>&1 || exit 0
 
 if [ "$mode" = "clear" ]; then
-  # PANE_ID はフラグより前（下の set 経路と同じ理由）
+  # PANE_ID before the flags (same reason as the set path below)
   herdr pane report-metadata "$HERDR_PANE_ID" \
     --source island \
     --clear-token reason >/dev/null 2>&1
@@ -41,21 +42,23 @@ FILTER="$here/reason-filter.jq"
 reason="$(jq -r -f "$FILTER" 2>/dev/null)"
 [ -n "$reason" ] || exit 0
 
-# --seq は付けない。
+# No --seq here.
 #
-# 元は date +%s%3N のミリ秒を渡していたが、%N は GNU 拡張で BSD/macOS では
-# 展開されず "17857471073N" のような非数値になる（CI の macOS ジョブで実測）。
+# It used to pass milliseconds from date +%s%3N, but %N is a GNU extension: on
+# BSD/macOS it does not expand and you get a non-numeric string like
+# "17857471073N" (measured in the macOS CI job).
 #
-# そもそも --seq が要るのは「古い報告が新しい報告を上書きしないこと」を
-# 保証したい場合。この hook は質問や許可要求が発生した瞬間に 1 回送るだけで、
-# 同一ペインへ並行して複数の理由が飛ぶ経路が無い。--seq を省いても
-# report-metadata は rc 0 で受け付け、連続送信は後勝ちになることを実測済み。
-# 単調増加値を作るためだけに python3 を呼ぶと hook の依存が 1 つ増え、
-# python3 が無い環境で理由が出なくなる —— 得るものに対して代償が大きい。
+# --seq exists to guarantee that an older report never overwrites a newer one.
+# This hook sends exactly once, at the moment a question or permission request
+# appears, and there is no path that sends several reasons to the same pane
+# concurrently. Measured: without --seq, report-metadata still accepts with
+# rc 0, and back-to-back sends are last-write-wins. Calling python3 purely to
+# mint a monotonic counter would add a dependency to the hook and lose the
+# reason entirely on machines without python3 — too high a price for what it buys.
 #
-# PANE_ID は必ずフラグより前に置く。後ろに置くと herdr が --source の値を
-# フラグとして再解釈して "unknown option" で落ちる（0.7.5 実測）。
-# --help の Usage 行は PANE_ID を最後に書いているので、素直に従うと踏む。
+# Always put PANE_ID before the flags. Put it after and herdr re-reads the value
+# of --source as a flag and dies with "unknown option" (measured on 0.7.5).
+# The Usage line in --help puts PANE_ID last, so following it naively is the trap.
 herdr pane report-metadata "$HERDR_PANE_ID" \
   --source island \
   --token "reason=$reason" \

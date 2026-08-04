@@ -1,12 +1,14 @@
 #!/bin/bash
-# fake_socket.sh の変種。herdr が実際に返すエラー応答
-# （{"id":"","error":{"code":"invalid_request","message":"..."}}）を
-# 常に返す偽 socket。I7（応答未読チェック）を検出させるためのもので、
-# 成功応答を返す tests/fake_socket.sh（変更禁止）とは別ファイルにしてある。
+# A variant of fake_socket.sh: a fake socket that always returns the error reply
+# herdr genuinely sends
+# ({"id":"","error":{"code":"invalid_request","message":"..."}}).
+# It exists to expose I7 (the unread-reply check), and is kept as a separate
+# file from tests/fake_socket.sh (which must not change) so that one keeps
+# returning success replies.
 #
-# 使い方は fake_socket.sh と同じ: start_fake_error_socket / stop_fake_error_socket。
-# HERDR_SOCKET_PATH / CAPTURE を同じ変数名でエクスポートするので、
-# fake_socket.sh の sent() / nothing_sent() / reset_capture() をそのまま流用できる。
+# Usage mirrors fake_socket.sh: start_fake_error_socket / stop_fake_error_socket.
+# It exports HERDR_SOCKET_PATH / CAPTURE under the same variable names, so
+# sent() / nothing_sent() / reset_capture() from fake_socket.sh work unchanged.
 
 start_fake_error_socket() {
   FAKE_DIR="$(mktemp -d -p /tmp)"
@@ -51,7 +53,7 @@ while True:
     [ -e "$HERDR_SOCKET_PATH.ready" ] && return 0
     sleep 0.02
   done
-  echo "fake error socket が立ち上がりませんでした" >&2
+  echo "the fake error socket never came up" >&2
   return 1
 }
 

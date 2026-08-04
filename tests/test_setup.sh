@@ -23,7 +23,7 @@ export ISLAND_CODEX_HOOKS="$WORK/hooks.json"
 export ISLAND_CCSTATUS="$WORK/ccstatus"
 export ISLAND_ASSUME_YES=1
 
-# rows_by_agent を持つ config を置く（旧 herdr-jump 相当）
+# Lay down a config that has rows_by_agent (as the old herdr-jump would)
 cat > "$ISLAND_CONFIG" <<'EOF'
 [ui.sidebar.agents]
 rows = [["agent"]]
@@ -34,24 +34,25 @@ echo '{}' > "$ISLAND_CLAUDE_SETTINGS"
 
 out="$(bash "$here/../bin/setup.sh" 2>&1)"
 
-# 最重要: rows_by_agent の complete override を警告すること
-assert_contains "$out" "rows_by_agent" "rows_by_agent があれば警告する"
-# シングルクォート必須。"$reason" だと bash が未定義変数として展開し
-# set -u で落ちる（リテラルの $reason を探したいのであって変数ではない）
-assert_contains "$out" '$reason' "追加するトークンを提示する"
+# Most important: it warns about the complete override that rows_by_agent is
+assert_contains "$out" "rows_by_agent" "it warns when rows_by_agent is present"
+# Single quotes are required here. With "$reason", bash would expand an unset
+# variable and die under set -u — we want the literal $reason, not a variable.
+assert_contains "$out" '$reason' "it shows the token it is about to add"
 
-# 適用されていること
-assert_contains "$(cat "$ISLAND_CONFIG")" '$reason' "config に行が入る"
+# It was actually applied
+assert_contains "$(cat "$ISLAND_CONFIG")" '$reason' "the row lands in the config"
 
-# doctor が現状を報告できること
+# doctor can report the current state
 d="$(bash "$here/../bin/doctor.sh" 2>&1)"
-# 「reason」だけを見るアサーションは、あり/なしの判定が壊れていても通る。
-# 適用済みの状態なので「あり」と出ることまで確かめる
-assert_contains "$d" "reason line: present" "doctor は reason 行ありを報告する"
+# An assertion that only looks for "reason" would pass even with the
+# present/absent decision broken. The row is applied here, so check that it
+# actually reports "present".
+assert_contains "$d" "reason line: present" "doctor reports the reason row as present"
 
-# remove で戻ること
+# remove puts it back
 bash "$here/../bin/remove.sh" >/dev/null 2>&1
 assert_eq "no" "$(grep -q '\$reason' "$ISLAND_CONFIG" && echo yes || echo no)" \
-  "remove で行が消える"
+  "remove takes the row away"
 
 finish

@@ -1,16 +1,17 @@
 #!/bin/bash
-# 偽の herdr socket を立て、受け取った JSON-RPC リクエストを記録する。
+# Stand up a fake herdr socket and record the JSON-RPC requests it receives.
 #
-# 本番と同じ経路（UNIX socket への JSON 送信）を通すので、CLI の引数形式に
-# 依存しない。JSON で送るため word splitting の心配も構造的に無い ——
-# 値に空白や | が入っていても JSON の 1 フィールドとして届く。
+# It goes through the same path production does (JSON over a UNIX socket), so it
+# does not depend on the CLI's argument format. Sending JSON also removes any
+# structural worry about word splitting — a value containing spaces or | still
+# arrives as one JSON field.
 #
-#   $HERDR_SOCKET_PATH … 偽 socket のパス（フック側はこれを読む）
-#   $CAPTURE           … 受信した JSON を 1 行 1 リクエストで追記
+#   $HERDR_SOCKET_PATH … path to the fake socket (what the hook side reads)
+#   $CAPTURE           … received JSON, appended one request per line
 #
-# socket のパスは -p /tmp で明示的に短く保つ。UNIX socket のパスは
-# sun_path 108 バイトが上限で、TMPDIR が深いディレクトリを指していると
-# bind に失敗する（しかもテストからは原因が見えにくい）。
+# Keep the socket path explicitly short with -p /tmp. A UNIX socket path is
+# capped at 108 bytes of sun_path, so a TMPDIR pointing at a deep directory
+# makes bind fail — and the cause is hard to see from inside the test.
 
 start_fake_socket() {
   FAKE_DIR="$(mktemp -d -p /tmp)"
@@ -26,8 +27,8 @@ sock_path, cap = sys.argv[1], sys.argv[2]
 srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 srv.bind(sock_path)
 srv.listen(8)
-# bind が済んだことを呼び出し側に知らせる。socket ファイルの存在では
-# listen 前に進んでしまう余地があるので別ファイルで合図する
+# Signal to the caller that bind is done. The socket file existing would leave
+# room to proceed before listen, so signal with a separate file.
 open(sock_path + ".ready", "w").close()
 
 while True:
@@ -50,13 +51,13 @@ while True:
 ' "$HERDR_SOCKET_PATH" "$CAPTURE" &
   FAKE_PID=$!
 
-  # listen 完了を待つ。2 秒で諦める
+  # Wait for listen to complete; give up after 2 seconds
   local i
   for i in $(seq 100); do
     [ -e "$HERDR_SOCKET_PATH.ready" ] && return 0
     sleep 0.02
   done
-  echo "fake socket が立ち上がりませんでした" >&2
+  echo "the fake socket never came up" >&2
   return 1
 }
 
@@ -69,12 +70,12 @@ stop_fake_socket() {
 
 reset_capture() { : > "$CAPTURE"; }
 
-# sent <jq フィルタ> : 最後に受信したリクエストから値を取る。
-# 何も届いていなければ空文字を返す
+# sent <jq filter> : pull a value out of the most recently received request.
+# Returns the empty string when nothing has arrived.
 sent() {
   [ -s "$CAPTURE" ] || { printf ''; return 0; }
   tail -1 "$CAPTURE" | jq -r "$1" 2>/dev/null
 }
 
-# nothing_sent : 1 件も届いていないか
+# nothing_sent : has nothing at all arrived?
 nothing_sent() { [ -s "$CAPTURE" ] && echo no || echo yes; }

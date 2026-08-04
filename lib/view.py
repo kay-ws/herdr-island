@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""agent.view.set / agent.view.clear を socket へ送る。
+"""Send agent.view.set / agent.view.clear to the socket.
 
-agent.view.* には CLI ラッパが無いため socket 直叩き。view は揮発性
-（サーバ終了・プラグインの無効化で消える）なので、送った params を
-STATE_DIR に保存し [[startup]] から再適用する。
+agent.view.* has no CLI wrapper, so this talks to the socket directly. Views are
+transient — they vanish when the server exits or the plugin is disabled — so the
+params that were sent are saved in STATE_DIR and re-applied from [[startup]].
 """
 import json
 import os
@@ -29,13 +29,14 @@ def state_file():
 
 
 def send(method, params):
-    # herdr の応答を読まずに True を返すと、herdr がリクエストを拒否した
-    # ケース（パラメータ名の誤り・必須フィールド欠落・スキーマ変更後の互換切れ）
-    # まで「成功」扱いになる。可視症状は「ボタンを押しても何も起きない」で、
-    # エラーがどこにも出ない。1 行の応答を読んで error キーの有無で判定し、
-    # 拒否ならメッセージを stderr に出す。settimeout は維持したまま —
-    # 応答が返らないサーバに無応答のまま待たされて呼び出し元がハングしない
-    # ようにする。timeout も OSError のサブクラスなのでここで失敗として拾われる
+    # Returning True without reading herdr's reply would count the cases where
+    # herdr *rejected* the request — a misspelled parameter, a missing required
+    # field, an incompatibility after a schema change — as "success". The
+    # visible symptom is "I pressed the button and nothing happened", with the
+    # error surfacing nowhere. So read the one-line reply, decide on the
+    # presence of an error key, and print the message to stderr on rejection.
+    # settimeout stays in place so a server that never replies cannot hang the
+    # caller; timeout is a subclass of OSError, so it is caught as a failure here.
     path = os.environ.get("HERDR_SOCKET_PATH")
     if not path:
         sys.stderr.write("Could not send to herdr (no socket path)\n")
@@ -77,11 +78,12 @@ def main():
     op = sys.argv[1] if len(sys.argv) > 1 else ""
     sf = state_file()
 
-    # state ファイルの意味は「サーバに実際に伝えた内容」であって
-    # 「ユーザーが望んでいる状態」ではない。restore の役目はサーバ再起動で
-    # 消えた view の復元なので、一度も適用されていない view を保存すると
-    # restore が嘘をつく（herdr 未起動時に focus を叩いた人が、次回起動時に
-    # 理由の分からない絞り込み画面に出会う）。よって送信成功時のみ更新する。
+    # The state file means "what was actually communicated to the server", not
+    # "what the user wants". restore exists to bring back a view lost to a
+    # server restart, so saving a view that was never applied would make restore
+    # lie: someone who hits focus while herdr is down would meet an unexplained
+    # filtered screen on the next start. Hence it is only updated on a
+    # successful send.
     if op == "set":
         if not send("agent.view.set", PARAMS):
             return 1

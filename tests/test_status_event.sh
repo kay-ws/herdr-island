@@ -24,40 +24,40 @@ fire() {
 logged() { cat "$FAKE_HERDR_LOG"; }
 nothing_sent() { [ -s "$FAKE_HERDR_LOG" ] && echo no || echo yes; }
 
-# --- blocked を抜けたら消す ---
+# --- leaving blocked clears it ---
 fire '{"pane_id":"w0:p1","workspace_id":"w0","agent_status":"working"}'
-assert_contains "$(logged)" "--clear-token reason" "blocked 以外へ遷移したら reason を消す"
-assert_contains "$(logged)" "--source island"      "source は island"
-assert_eq "w0:p1" "$(logged | awk '{print $3}')"   "PANE_ID はフラグより前"
+assert_contains "$(logged)" "--clear-token reason" "a transition to anything but blocked clears reason"
+assert_contains "$(logged)" "--source island"      "the source is island"
+assert_eq "w0:p1" "$(logged | awk '{print $3}')"   "PANE_ID comes before the flags"
 
-# --- blocked のままなら消さない ---
+# --- staying blocked does not clear ---
 fire '{"pane_id":"w0:p1","workspace_id":"w0","agent_status":"blocked"}'
-assert_eq "yes" "$(nothing_sent)" "blocked のときは消さない"
+assert_eq "yes" "$(nothing_sent)" "nothing is cleared while blocked"
 
-# --- 不正な payload ---
+# --- malformed payloads ---
 fire 'not json'
-assert_eq "yes" "$(nothing_sent)" "壊れた JSON では何もしない"
+assert_eq "yes" "$(nothing_sent)" "broken JSON does nothing"
 
 fire '{"workspace_id":"w0","agent_status":"working"}'
-assert_eq "yes" "$(nothing_sent)" "pane_id が無ければ何もしない"
+assert_eq "yes" "$(nothing_sent)" "no pane_id means do nothing"
 
-# --- 空文字 / キー欠落の agent_status では消さない ---
-# これを消しすぎると、ユーザーがまだ見ていない理由が消える。
-# ガードを外すと落ちることを確認済み（レビューの mutation test）
+# --- an empty or missing agent_status must not clear ---
+# Over-clearing here erases a reason the user has not looked at yet.
+# Removing the guard has been confirmed to break these (mutation test in review).
 fire '{"pane_id":"w0:p1","workspace_id":"w0","agent_status":""}'
-assert_eq "yes" "$(nothing_sent)" "agent_status が空文字なら消さない"
+assert_eq "yes" "$(nothing_sent)" "an empty agent_status does not clear"
 
 fire '{"pane_id":"w0:p1","workspace_id":"w0"}'
-assert_eq "yes" "$(nothing_sent)" "agent_status キーが無ければ消さない"
+assert_eq "yes" "$(nothing_sent)" "a missing agent_status key does not clear"
 
-# --- HERDR_PLUGIN_EVENT_JSON が未設定でも落ちない ---
+# --- an unset HERDR_PLUGIN_EVENT_JSON must not break anything ---
 : > "$FAKE_HERDR_LOG"
 env -u HERDR_PLUGIN_EVENT_JSON bash "$E" >/dev/null 2>&1
-assert_eq "0" "$?" "環境変数が未設定でも exit 0"
-assert_eq "yes" "$(nothing_sent)" "環境変数が未設定なら何もしない"
+assert_eq "0" "$?" "exit 0 even with the env var unset"
+assert_eq "yes" "$(nothing_sent)" "an unset env var does nothing"
 
-# --- 終了コード ---
+# --- exit codes ---
 HERDR_PLUGIN_EVENT_JSON='not json' bash "$E" >/dev/null 2>&1
-assert_eq "0" "$?" "壊れた JSON でも exit 0"
+assert_eq "0" "$?" "exit 0 even on broken JSON"
 
 finish

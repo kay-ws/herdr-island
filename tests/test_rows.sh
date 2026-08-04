@@ -7,33 +7,33 @@ R="$here/../lib/rows.py"
 WORK="$(mktemp -d -p /tmp)"
 trap 'rm -rf "$WORK"' EXIT
 
-# roundtrip <名前> <元の内容> : add -> remove でバイト一致することを確かめる
+# roundtrip <name> <original content> : check that add -> remove is byte-identical
 roundtrip() {
   local name="$1" body="$2"
   local orig="$WORK/$name.toml"
   printf '%s' "$body" > "$orig"
 
   python3 "$R" add "$orig" > "$WORK/$name.added"
-  assert_eq "0" "$?" "$name: add は 0 を返す"
-  assert_contains "$(cat "$WORK/$name.added")" '$reason' "$name: add で \$reason が入る"
+  assert_eq "0" "$?" "$name: add returns 0"
+  assert_contains "$(cat "$WORK/$name.added")" '$reason' "$name: add inserts \$reason"
 
   python3 "$R" remove "$WORK/$name.added" > "$WORK/$name.back"
   assert_eq "0" "$(cmp -s "$orig" "$WORK/$name.back" && echo 0 || echo 1)" \
-    "$name: add -> remove で元とバイト一致"
+    "$name: add -> remove is byte-identical to the original"
 }
 
-# assert_toml_valid <ファイル> <メッセージ> : stdlib tomllib で read-only parse できることを確かめる
+# assert_toml_valid <file> <message> : check it read-only parses with stdlib tomllib
 assert_toml_valid() {
   local file="$1" msg="$2"
   if python3 -c 'import tomllib,sys; tomllib.load(open(sys.argv[1],"rb"))' "$file" 2>/dev/null; then
     printf 'ok   %s\n' "$msg"
   else
-    printf 'FAIL %s\n  %q は有効な TOML でない\n' "$msg" "$file" >&2
+    printf 'FAIL %s\n  %q is not valid TOML\n' "$msg" "$file" >&2
     _fail=1
   fi
 }
 
-# --- ケース A1: 複数行の rows、末尾カンマ「あり」 ---
+# --- Case A1: multi-line rows, trailing comma present ---
 roundtrip multiline '[ui.sidebar.agents]
 row_gap = 0
 rows = [
@@ -42,10 +42,11 @@ rows = [
 ]
 '
 
-# --- ケース A2 (I2): 複数行の rows、末尾カンマ「無し」 ---
-# 末尾カンマの無い配列は珍しくないスタイルで、README のサンプル自体も
-# たまたま末尾カンマ付きなだけ。ここに区切りカンマを補わないと
-# ["agent"] の直後に次要素が続き、無効な TOML を吐いて apply が失敗する。
+# --- Case A2 (I2): multi-line rows, no trailing comma ---
+# Arrays without a trailing comma are a perfectly common style; the README
+# sample merely happens to have one. Without supplying the separating comma
+# here, the next element follows straight after ["agent"], producing invalid
+# TOML and making apply fail.
 roundtrip multiline_no_comma '[ui.sidebar.agents]
 row_gap = 0
 rows = [
@@ -54,40 +55,40 @@ rows = [
 ]
 '
 assert_toml_valid "$WORK/multiline_no_comma.added" \
-  "multiline_no_comma: add 後が有効な TOML（I2 の直接検出）"
+  "multiline_no_comma: valid TOML after add (direct detection of I2)"
 
-# --- ケース B: 1 行の rows ---
+# --- Case B: single-line rows ---
 roundtrip inline '[ui.sidebar.agents]
 rows = [["state_icon", "workspace"], ["agent"]]
 '
 
-# --- ケース D (I3): テーブルはあるが rows キーが無い ---
-# bin/setup.sh が警告する「rows_by_agent だけを設定している」利用者と同じ
-# 状態。BLOCK をそのまま追記すると [ui.sidebar.agents] を二重定義して
-# config check に落ちる。
+# --- Case D (I3): the table exists but has no rows key ---
+# The same state as the "only rows_by_agent is configured" user that
+# bin/setup.sh warns about. Appending BLOCK as-is would define
+# [ui.sidebar.agents] twice and fail config check.
 roundtrip table_no_rows '[ui.sidebar.agents]
 row_gap = 0
 '
 assert_toml_valid "$WORK/table_no_rows.added" \
-  "table_no_rows: add 後が有効な TOML"
+  "table_no_rows: valid TOML after add"
 
-# --- ケース C: テーブルが無い ---
+# --- Case C: no table at all ---
 roundtrip absent '[ui]
 sidebar_width = 30
 '
 
-# --- 冪等性 ---
+# --- idempotence ---
 printf '%s' '[ui.sidebar.agents]
 rows = [["agent"]]
 ' > "$WORK/idem.toml"
 python3 "$R" add "$WORK/idem.toml" > "$WORK/idem.1"
 python3 "$R" add "$WORK/idem.1" > "$WORK/idem.2"
 rc=$?
-assert_eq "10" "$rc" "既に行があれば rc=10（変更不要）"
+assert_eq "10" "$rc" "an existing row gives rc=10 (no change needed)"
 assert_eq "0" "$(cmp -s "$WORK/idem.1" "$WORK/idem.2" && echo 0 || echo 1)" \
-  "2 回目の add で内容が変わらない"
+  "a second add changes nothing"
 
-# --- 他人の行を壊さない（usagebar 共存） ---
+# --- do not break anyone else's rows (coexisting with usagebar) ---
 printf '%s' '[ui.sidebar.agents]
 row_gap = 0
 rows = [
@@ -98,10 +99,10 @@ rows = [
 ' > "$WORK/co.toml"
 python3 "$R" add "$WORK/co.toml" > "$WORK/co.added"
 for t in '$title' '$provider' '$limit' '$context'; do
-  assert_contains "$(cat "$WORK/co.added")" "$t" "usagebar の $t が保持される"
+  assert_contains "$(cat "$WORK/co.added")" "$t" "the usagebar $t is preserved"
 done
 
-# --- 利用者が手で変えた行は削除しない ---
+# --- never delete a row the user edited by hand ---
 printf '%s' '[ui.sidebar.agents]
 rows = [
   ["agent"],
@@ -109,13 +110,14 @@ rows = [
 ]
 ' > "$WORK/mine.toml"
 python3 "$R" remove "$WORK/mine.toml" > "$WORK/mine.out"
-assert_eq "10" "$?" "完全一致しない \$reason 行は rc=10 で残す"
-assert_contains "$(cat "$WORK/mine.out")" '#ffffff' "利用者の行はそのまま残る"
+assert_eq "10" "$?" "a \$reason row that does not match exactly is kept, rc=10"
+assert_contains "$(cat "$WORK/mine.out")" '#ffffff' "the user's row survives untouched"
 
-# --- I1: 別テーブルの rows を掴まないこと ---
-# ファイル内の最初の `rows =` を拾う実装だと、先に別テーブルがある config で
-# そちらへ挿入してしまう。TOML として妥当なので config check は通り、
-# doctor もファイル全体を grep するので「あり」と報告する = 全診断が正常と言う誤り
+# --- I1: never grab the rows of a different table ---
+# An implementation that takes the first `rows =` in the file would insert into
+# the wrong place in any config where another table comes first. That is valid
+# TOML so config check passes, and doctor greps the whole file so it reports
+# "present" = every diagnostic says fine while the edit is wrong.
 cat > "$WORK/other.toml" <<'EOF'
 [ui.sidebar.spaces]
 rows = [["state_icon", "workspace"]]
@@ -124,16 +126,16 @@ rows = [["state_icon", "workspace"]]
 rows = [["agent"]]
 EOF
 python3 "$R" add "$WORK/other.toml" > "$WORK/other.added"
-assert_eq "0" "$?" "別テーブルがあっても add は 0"
-# spaces 側は無傷、agents 側にだけ入ること
+assert_eq "0" "$?" "add returns 0 even with another table present"
+# The spaces side stays untouched; only the agents side gets the row
 spaces_line="$(grep -n 'ui.sidebar.spaces' -A1 "$WORK/other.added" | tail -1)"
 assert_eq "no" "$(printf '%s' "$spaces_line" | grep -qF 'reason' && echo yes || echo no)" \
-  "spaces テーブルの rows には入らない"
+  "nothing goes into the rows of the spaces table"
 agents_line="$(grep -n 'ui.sidebar.agents' -A1 "$WORK/other.added" | tail -1)"
 assert_eq "yes" "$(printf '%s' "$agents_line" | grep -qF 'reason' && echo yes || echo no)" \
-  "agents テーブルの rows に入る"
+  "it goes into the rows of the agents table"
 
-# --- 子テーブルの rows を掴まないこと（かつ I3 の実例：rows キー不在） ---
+# --- never grab a child table's rows (also a live example of I3: no rows key) ---
 cat > "$WORK/child.toml" <<'EOF'
 [ui.sidebar.agents]
 row_gap = 0
@@ -142,20 +144,21 @@ row_gap = 0
 claude = [["agent"]]
 EOF
 python3 "$R" add "$WORK/child.toml" > "$WORK/child.added"
-assert_eq "0" "$?" "child: rows_by_agent だけの config でも add は 0"
+assert_eq "0" "$?" "child: add returns 0 even for a rows_by_agent-only config"
 assert_eq "no" "$(grep -A2 'rows_by_agent' "$WORK/child.added" | grep -qF 'reason' && echo yes || echo no)" \
-  "rows_by_agent の中には絶対に入れない"
-assert_toml_valid "$WORK/child.added" "child: add 後が有効な TOML"
+  "nothing is ever written inside rows_by_agent"
+assert_toml_valid "$WORK/child.added" "child: valid TOML after add"
 python3 "$R" remove "$WORK/child.added" > "$WORK/child.back"
 assert_eq "0" "$(cmp -s "$WORK/child.toml" "$WORK/child.back" && echo 0 || echo 1)" \
-  "child: add -> remove で元とバイト一致"
+  "child: add -> remove is byte-identical to the original"
 
 
-# --- 空配列（controller の独立検証で発覚。実装者のケース列挙に無かった形）---
-# rows = [] に `, ROW` を足すと `rows = [, ROW]` と先頭カンマになり不正な TOML。
-# I2（末尾カンマが無い）と同じ「カンマの要否を中身で決める」問題の裏返し。
-# 空かつ複数行（rows = [\n]）は「最後の要素」が存在しないので、
-# カンマ判定の手前で処理しないと複数行パスが誤認する
+# --- empty arrays (surfaced by independent review; absent from the original case list) ---
+# Adding `, ROW` to rows = [] yields `rows = [, ROW]` — a leading comma, invalid
+# TOML. It is the mirror image of I2 (no trailing comma): the same "decide comma
+# placement from the contents" problem. An empty *and* multi-line array
+# (rows = [\n]) has no "last element", so unless it is handled before the comma
+# decision, the multi-line path misidentifies one.
 roundtrip empty_inline '[ui.sidebar.agents]
 rows = []
 '
@@ -167,31 +170,32 @@ rows = [
 ]
 '
 
-# --- ISLAND_REASON_FG: 色をまたいでも往復すること ---
-# 色を指定して apply した config を、指定せずに revert する経路。照合を
-# 完全一致でやっていた頃は ROW_TEXT が一致せず rc 10（変更不要）が返り、
-# 行が config に取り残された —— 利用者から見ると「revert したのに消えない」で、
-# 消すには当時の環境変数を思い出す必要がある。同一性の根拠は色ではなく
-# token = "$reason" の方なので、fg の値は照合から外してある。
-# 5 つの挿入形すべてで確かめる（形ごとに前後の文脈が違い、緩めた正規表現が
-# 効くかは形ごとに独立に壊れ得る）
+# --- ISLAND_REASON_FG: the round trip must survive a colour change ---
+# The path where a config applied with a colour is reverted without one. Back
+# when matching was exact, ROW_TEXT failed to match, rc 10 (no change needed)
+# came back, and the row was left stranded in the config — from the user's side
+# "I reverted and it did not go away", removable only by remembering which env
+# var was set at the time. Identity rests on token = "$reason", not the colour,
+# so the fg value is excluded from matching.
+# Check all five insertion shapes: each has different surrounding context, and
+# whether the relaxed regex works can break independently per shape.
 cross_color() {
   local name="$1" body="$2"
   local orig="$WORK/$name.cc.toml"
   printf '%s' "$body" > "$orig"
 
   ISLAND_REASON_FG='#00ff00' python3 "$R" add "$orig" > "$WORK/$name.cc.added"
-  assert_contains "$(cat "$WORK/$name.cc.added")" '#00ff00' "$name: 指定した色で入る"
+  assert_contains "$(cat "$WORK/$name.cc.added")" '#00ff00' "$name: it goes in with the given colour"
 
-  # 色違いで既に入っているものを二重に足さない
+  # Do not add a second copy when one is already there in a different colour
   ISLAND_REASON_FG='#123456' python3 "$R" add "$WORK/$name.cc.added" >/dev/null 2>&1
-  assert_eq "10" "$?" "$name: 色違いで入っていても add は 10"
+  assert_eq "10" "$?" "$name: add returns 10 even when the existing row differs in colour"
 
-  # 環境変数を指定せずに remove（= 既定色で照合される）
+  # remove without the env var (= matched against the default colour)
   python3 "$R" remove "$WORK/$name.cc.added" > "$WORK/$name.cc.back"
-  assert_eq "0" "$?" "$name: 色違いでも remove は 0"
+  assert_eq "0" "$?" "$name: remove returns 0 across a colour difference"
   assert_eq "0" "$(cmp -s "$orig" "$WORK/$name.cc.back" && echo 0 || echo 1)" \
-    "$name: 色を指定して add -> 指定せず remove で元とバイト一致"
+    "$name: add with a colour -> remove without one is byte-identical to the original"
 }
 
 cross_color cc_multiline '[ui.sidebar.agents]

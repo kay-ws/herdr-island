@@ -1,11 +1,12 @@
 #!/bin/bash
-# 旧 herdr-jump の痕跡を 4 箇所から除去する。
-# install.sh に uninstall 経路が無かったため、撤去はここで新規に実装する。
+# Remove traces of the old herdr-jump from four places.
+# Its install.sh had no uninstall path, so the removal is implemented fresh here.
 set -uo pipefail
 
-# 検出用。旧実装が残しうる識別子を網羅する。
-# herdr-codex-usage を落とすと、codex 側にそれしか無いファイルで detect が
-# rc 10（痕跡なし）を返し purge が無言で素通りする
+# For detection: covers every identifier the old implementation could leave
+# behind. Drop herdr-codex-usage from this list and, for a codex-side file that
+# contains only that one, detect returns rc 10 (no traces) and purge silently
+# does nothing.
 PAT='herdr-jump|herdr-usage-push|herdr-codex-usage'
 
 claude_settings() { printf '%s' "${ISLAND_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"; }
@@ -26,28 +27,32 @@ legacy_detect() {
   return 10
 }
 
-# バックアップ名の一意性は mktemp に任せる。秒単位の名前だと、apply と revert を
-# 同じ秒に走らせたときのように cp が先のバックアップを黙って上書きする（cp に -n は
-# 無い）。ミリ秒（%3N）は GNU 拡張で BSD/macOS では展開されない。
-# bin/_config.sh / lib/hooks.sh と同じ手（-p は macOS でも動作を確認済み）
+# Leave backup-name uniqueness to mktemp. With one-second resolution, running
+# apply and revert within the same second makes cp silently overwrite the
+# earlier backup (cp has no -n). Milliseconds (%3N) are a GNU extension and do
+# not expand on BSD/macOS. Same approach as bin/_config.sh and lib/hooks.sh
+# (-p is confirmed working on macOS too).
 _backup() {
   [ -f "$1" ] || return 0
   local bak; bak="$(mktemp "$1.bak.$(date +%Y%m%d-%H%M%S).XXXXXX")" || return 1
   cp -p "$1" "$bak"
 }
 
-# _stage_for <file> : 書き戻し用の空ステージを作りパスを stdout へ。
+# _stage_for <file> : create an empty stage file for the write-back and print
+# its path to stdout.
 #
-# 対象と同じディレクトリに作る。素の `mktemp`（$TMPDIR）だと 2 つ壊れる:
-#   - mv がファイルシステムを跨ぐとアトミックでなくなる。途中で落ちれば
-#     利用者の設定が壊れたまま残る
-#   - TMPDIR が使えない環境で mktemp が空を返し、`> ""` が失敗して purge が
-#     黙って素通りする（痕跡は消えないのに rc 0 で「済んだ」と報告する）
+# It is created in the target's own directory. A plain `mktemp` ($TMPDIR) breaks
+# two things:
+#   - mv stops being atomic once it crosses filesystems. Die part-way through
+#     and the user's settings are left corrupted.
+#   - Where TMPDIR is unusable, mktemp returns empty, `> ""` fails, and purge
+#     silently does nothing — reporting rc 0 ("done") while the traces remain.
 #
-# 権限は cp -p で運ぶ。mktemp は 0600 で作るので、そのまま mv すると利用者の
-# ファイルが 0600 に化ける —— ccstatus は実行される側なので実行ビットが落ちて
-# ステータス行が黙って出なくなる。chmod --reference は使わない（GNU 拡張で
-# macOS には無く、失敗しても静かなので umask 由来の権限が残る）
+# Permissions are carried over with cp -p. mktemp creates at 0600, so a straight
+# mv would turn the user's file into 0600 — and since ccstatus is a file that
+# gets executed, losing the execute bit makes the status line silently vanish.
+# Do not use chmod --reference: it is a GNU extension macOS lacks, and it fails
+# quietly, leaving whatever permissions the umask happened to produce.
 _stage_for() {
   local f="$1" stage
   stage="$(mktemp "$(dirname "$f")/.island-legacy.XXXXXX")" || return 1
@@ -55,7 +60,7 @@ _stage_for() {
   printf '%s' "$stage"
 }
 
-# hook JSON から自分のエントリだけを取り除く。他人の hook には触らない
+# Strip only our own entries out of the hook JSON; never touch anyone else's
 _purge_hooks() {
   local f="$1"
   [ -f "$f" ] || return 0
@@ -75,7 +80,7 @@ _purge_hooks() {
   ' "$f" > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" || rm -f "$tmp"
 }
 
-# config.toml は 2 箇所。マーカーブロックと [ui] 内の単独行
+# Two places in config.toml: the marker block, and a lone line inside [ui]
 _purge_config() {
   local f="$1"
   [ -f "$f" ] || return 0
@@ -86,15 +91,16 @@ _purge_config() {
     /^# >>> herdr-jump \(managed\) >>>/ { skip = 1 }
     skip && /^# <<< herdr-jump \(managed\) <<</ { skip = 0; next }
     skip { next }
-    # ブロック外で消すのは agent_panel_sort の 1 行だけ。
-    # /herdr-jump/ のような素の部分一致にすると、利用者が書いた
-    # 「herdr-jump を試したが乗り換えた」のような無関係な行まで巻き込む
+    # Outside the block, the only line removed is the agent_panel_sort one.
+    # A bare substring match like /herdr-jump/ would also sweep up unrelated
+    # lines the user wrote themselves, e.g. a comment saying they tried
+    # herdr-jump and moved on.
     /^[[:space:]]*agent_panel_sort[[:space:]]*=.*#[[:space:]]*herdr-jump/ { next }
     { print }
   ' "$f" > "$tmp" && mv -f "$tmp" "$f" || rm -f "$tmp"
 }
 
-# ccstatus は利用者自身のスクリプト。該当行だけ落とす
+# ccstatus is the user's own script — drop only the offending lines
 _purge_ccstatus() {
   local f="$1"
   [ -f "$f" ] || return 0

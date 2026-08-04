@@ -3,10 +3,10 @@ name = "Island"
 version = "1.0.0"
 min_herdr_version = "0.7.5"
 description = "Find the agents that are waiting on you. Shows why each agent stopped, and filters the Agents panel down to just those."
-# 両プラットフォームとも CI（GitHub Actions）で全テストを実行している。
-# macOS は Apple Silicon ランナーで検証。以前 macos を外していたのは
-# GNU 依存（wc -l のパディング / date %N / chmod --reference）が原因だが、
-# 検証済みで解消 —— 詳細は .github/workflows/tests.yml
+# Both platforms run the full test suite in CI (GitHub Actions); macOS is
+# verified on an Apple Silicon runner. macos used to be excluded because of
+# GNU-isms (wc -l padding / date %N / chmod --reference). Those are fixed and
+# verified now — see .github/workflows/tests.yml for the details.
 platforms = ["linux", "macos"]
 
 [[panes]]

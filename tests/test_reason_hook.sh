@@ -7,7 +7,7 @@ HOOK="$here/../hooks/island-reason.sh"
 WORK="$(mktemp -d -p /tmp)"
 trap 'rm -rf "$WORK"' EXIT
 
-# 偽 herdr。argv を 1 行にして記録する
+# Fake herdr — records argv as a single line
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/herdr" <<'EOF'
 #!/bin/bash
@@ -25,74 +25,74 @@ run_hook() {
 logged() { cat "$FAKE_HERDR_LOG"; }
 nothing_sent() { [ -s "$FAKE_HERDR_LOG" ] && echo no || echo yes; }
 
-# --- 送る内容 ---
+# --- what gets sent ---
 run_hook '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}'
-assert_contains "$(logged)" "pane report-metadata" "report-metadata を呼ぶ"
-assert_contains "$(logged)" "--source island"      "source は island"
-assert_contains "$(logged)" "reason=Bash: ls -la"  "reason に本文が乗る"
-assert_contains "$(logged)" "--ttl-ms 900000"      "TTL は 15 分"
+assert_contains "$(logged)" "pane report-metadata" "it calls report-metadata"
+assert_contains "$(logged)" "--source island"      "the source is island"
+assert_contains "$(logged)" "reason=Bash: ls -la"  "the body rides along in reason"
+assert_contains "$(logged)" "--ttl-ms 900000"      "the TTL is 15 minutes"
 
-# --- 引数順序の回帰。PANE_ID はフラグより前に置くこと ---
-# 後ろに置くと herdr が "unknown option" で落ちる（0.7.5 実測）
+# --- argument-order regression: PANE_ID must come before the flags ---
+# Put it after and herdr dies with "unknown option" (measured on 0.7.5)
 first_arg="$(logged | awk '{print $3}')"
-assert_eq "w0:p1" "$first_arg" "PANE_ID は report-metadata の直後（フラグより前）"
+assert_eq "w0:p1" "$first_arg" "PANE_ID sits right after report-metadata, before any flag"
 
-# --- ガード。いずれも何も呼ばずに抜けること ---
+# --- guards: each of these must bail without calling anything ---
 : > "$FAKE_HERDR_LOG"
 printf '{}' | HERDR_ENV=0 HERDR_PANE_ID=w0:p1 bash "$HOOK" >/dev/null 2>&1
-assert_eq "yes" "$(nothing_sent)" "HERDR_ENV が 1 でなければ何もしない"
+assert_eq "yes" "$(nothing_sent)" "nothing happens unless HERDR_ENV is 1"
 
 : > "$FAKE_HERDR_LOG"
 printf '{}' | HERDR_ENV=1 HERDR_PANE_ID= bash "$HOOK" >/dev/null 2>&1
-assert_eq "yes" "$(nothing_sent)" "HERDR_PANE_ID が空なら何もしない"
+assert_eq "yes" "$(nothing_sent)" "nothing happens when HERDR_PANE_ID is empty"
 
 run_hook 'this is not json'
-assert_eq "yes" "$(nothing_sent)" "壊れた JSON では何もしない"
+assert_eq "yes" "$(nothing_sent)" "broken JSON does nothing"
 
 run_hook '{"tool_name":"Bash","tool_input":"oops"}'
-assert_eq "yes" "$(nothing_sent)" "tool_input の型が不正でも何もしない"
+assert_eq "yes" "$(nothing_sent)" "a wrongly-typed tool_input does nothing"
 
-# --- clear モード ---
-# セットとクリアの契機を対にするため PostToolUse から呼ばれる経路
+# --- clear mode ---
+# The path called from PostToolUse, pairing the set and clear triggers
 : > "$FAKE_HERDR_LOG"
 HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
-assert_contains "$(logged)" "--clear-token reason" "clear 引数で reason を消す"
-assert_contains "$(logged)" "--source island"      "clear も source は island"
-assert_eq "w0:p1" "$(logged | awk '{print $3}')"   "clear でも PANE_ID はフラグより前"
+assert_contains "$(logged)" "--clear-token reason" "the clear argument clears reason"
+assert_contains "$(logged)" "--source island"      "clear uses the island source too"
+assert_eq "w0:p1" "$(logged | awk '{print $3}')"   "clear also puts PANE_ID before the flags"
 assert_eq "no" "$(grep -q 'ttl-ms' "$FAKE_HERDR_LOG" && echo yes || echo no)" \
-  "clear に TTL は付けない"
+  "clear carries no TTL"
 
-# clear は stdin を読まない（PostToolUse の payload は理由の材料ではない）
+# clear does not read stdin (a PostToolUse payload is not reason material)
 : > "$FAKE_HERDR_LOG"
 printf 'this is not json' | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
-assert_contains "$(logged)" "--clear-token reason" "壊れた stdin でも clear は成立する"
+assert_contains "$(logged)" "--clear-token reason" "clear still works with broken stdin"
 
-# 未知のモードでは何もしない
+# An unknown mode does nothing
 : > "$FAKE_HERDR_LOG"
 HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" bogus >/dev/null 2>&1
-assert_eq "yes" "$(nothing_sent)" "未知のモードでは何もしない"
+assert_eq "yes" "$(nothing_sent)" "an unknown mode does nothing"
 
 HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" clear >/dev/null 2>&1
-assert_eq "0" "$?" "clear も exit 0"
+assert_eq "0" "$?" "clear exits 0 as well"
 
-# --- python3 に依存しないこと ---
-# 禁じたいのは「python3 を起動すること」であって「python3 という語が
-# 出てくること」ではない。素の grep だと、なぜ python3 を呼ばないかを
-# 説明したコメントで落ちる（実際に落ちた）。コメント行を除いて判定する
+# --- it must not depend on python3 ---
+# What is banned is *launching* python3, not the word "python3" appearing. A
+# bare grep fails on the comment explaining why python3 is not called — which
+# actually happened. So judge with comment lines excluded.
 assert_eq "no" \
   "$(grep -v '^[[:space:]]*#' "$HOOK" | grep -q 'python3' && echo yes || echo no)" \
-  "hook は python3 を起動しない（コメントでの言及は可）"
+  "the hook never launches python3 (mentioning it in a comment is fine)"
 
-# --- 終了コード ---
+# --- exit codes ---
 printf 'not json' | HERDR_ENV=1 HERDR_PANE_ID=w0:p1 bash "$HOOK" >/dev/null 2>&1
-assert_eq "0" "$?" "壊れた JSON でも exit 0"
+assert_eq "0" "$?" "exit 0 even on broken JSON"
 
 printf '{}' | HERDR_ENV=0 bash "$HOOK" >/dev/null 2>&1
-assert_eq "0" "$?" "ガードで抜ける時も exit 0"
+assert_eq "0" "$?" "exit 0 when bailing out at a guard, too"
 
 BASH_ABS="$(command -v bash)"
 printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' \
   | env -u PATH HERDR_ENV=1 HERDR_PANE_ID=w0:p1 "$BASH_ABS" "$HOOK" >/dev/null 2>&1
-assert_eq "0" "$?" "jq / herdr が引けなくても exit 0"
+assert_eq "0" "$?" "exit 0 even when jq / herdr cannot be found"
 
 finish

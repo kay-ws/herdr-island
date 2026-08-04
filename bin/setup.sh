@@ -1,5 +1,5 @@
 #!/bin/bash
-# 対話つきの導入。popup pane から呼ばれる前提（action には TTY が無い）。
+# Interactive setup. Meant to be launched from a popup pane — actions have no TTY.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${HERDR_PLUGIN_ROOT:-$(cd "$here/.." && pwd)}"
@@ -7,8 +7,9 @@ source "$here/_config.sh"
 
 cfg="$(island_config_path)"
 
-# confirm <質問> : ISLAND_ASSUME_YES=1 なら常に yes。
-# TTY が無い場合も yes に倒さず no を返す（勝手に書き換えない）
+# confirm <question> : always yes when ISLAND_ASSUME_YES=1.
+# With no TTY it returns no rather than defaulting to yes — never edit
+# someone's config without being asked to.
 confirm() {
   [ "${ISLAND_ASSUME_YES:-0}" = "1" ] && return 0
   [ -t 0 ] || return 1
@@ -21,12 +22,13 @@ confirm() {
 echo "Island — find agents that are waiting"
 echo
 
-# 1. 旧 herdr-jump の痕跡
+# 1. Traces of the old herdr-jump
 #
-# 一時ファイルは mktemp で作る。/tmp/island-legacy.$$ は名前が PID から
-# 予測できるうえ、先回りして symlink を置かれると任意のファイルを踏む。
-# 後始末も trap に任せる —— 素の rm は SIGINT（プロンプト中の Ctrl-C）で
-# 到達せず、対話つきのこの経路では現実的に起きる
+# Create the temp file with mktemp. A name like /tmp/island-legacy.$$ is
+# predictable from the PID, and someone who plants a symlink there first can
+# make us clobber an arbitrary file. Leave the cleanup to a trap as well — a
+# plain rm is never reached on SIGINT (Ctrl-C at the prompt), which is a real
+# possibility on this interactive path.
 legacy_out="$(mktemp)" || exit 1
 trap 'rm -f "$legacy_out"' EXIT
 if bash "$root/lib/legacy.sh" detect > "$legacy_out" 2>/dev/null; then
@@ -39,7 +41,8 @@ if bash "$root/lib/legacy.sh" detect > "$legacy_out" 2>/dev/null; then
   echo
 fi
 
-# 2. rows_by_agent の影。complete override で新しい行が効かなくなる
+# 2. The shadow cast by rows_by_agent — a complete override that stops the
+#    added row from taking effect
 if [ -f "$cfg" ] && grep -q 'rows_by_agent' "$cfg" 2>/dev/null; then
   echo "Warning: config.toml contains rows_by_agent."
   echo "  rows_by_agent is a complete override in herdr. For any agent it lists,"
@@ -49,7 +52,7 @@ if [ -f "$cfg" ] && grep -q 'rows_by_agent' "$cfg" 2>/dev/null; then
   echo
 fi
 
-# 3. reason 行の追加
+# 3. Add the reason row
 echo "Row to add:"
 echo '  [{ token = "$reason", fg = "#f38ba8", bold = true }]'
 echo
@@ -64,7 +67,7 @@ else
   echo "config was not modified. The filtering feature alone works without configuration."
 fi
 
-# 4. agent CLI 側の hook 配線
+# 4. Wire the hooks on the agent CLI side
 echo
 echo "To capture stop reasons, a hook must be wired into Claude Code / Codex."
 echo "  Sets the reason: PermissionRequest (all tools), PreToolUse (AskUserQuestion only)"

@@ -13,12 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 2 つのテストが実物の herdr を要求する:
-      #   test_manifest.sh  … herdr plugin link でマニフェストを検証させる
-      #   test_apply_real.sh … 本物の herdr config check で検証ゲートを確かめる
-      # herdr は単一バイナリで配布されているので、取得して PATH に置くだけでよい。
-      # test_apply_real.sh は herdr 不在なら skip する作りなので、この手順が
-      # 失敗しても suite は緑になってしまう —— 取得の成否をここで明示的に見る。
+      # Two tests need a real herdr:
+      #   test_manifest.sh   … has `herdr plugin link` validate the manifest
+      #   test_apply_real.sh … exercises the validation gate through the real
+      #                        `herdr config check`
+      # herdr ships as a single binary, so fetching it onto PATH is enough.
+      # test_apply_real.sh skips itself when herdr is missing, so a failure in
+      # this step would still leave the suite green — check the fetch explicitly.
       - name: install herdr
         run: |
           set -euo pipefail
@@ -31,19 +32,19 @@ jobs:
         run: |
           set -euo pipefail
           jq --version
-          python3 --version   # tests/test_rows.sh は tomllib を使うので 3.11+
+          python3 --version   # 3.11+ — tests/test_rows.sh uses tomllib
 
       - name: run tests
         run: bash tests/run.sh
 
   macos:
-    # 移植済み。必須ジョブなので、macOS 側の退行はここで止まる。
-    # 実際に踏んだ非互換は BSD userland との差 2 種だった:
-    #   wc -l が先頭を空白でパディングする（失敗 5 件はすべてこれ）
-    #   date の %N が GNU 拡張で展開されない
-    # 事前の静的解析で挙げた mktemp -p は macOS でも動作した（誤検出）。
-    # 読みで見つかるのは GNU 固有のフラグで、同じコマンドの出力書式の差は
-    # 走らせるまで分からない。
+    # Ported. This job is required, so a macOS regression stops here.
+    # Only two BSD-userland incompatibilities actually bit us:
+    #   wc -l pads its output with leading spaces (all 5 failures were this)
+    #   date's %N is a GNU extension and does not expand
+    # Static analysis had also flagged mktemp -p, but it works on macOS
+    # (false positive). Reading the code finds GNU-only *flags*; differences in
+    # the *output format* of the same command only show up once you run it.
     name: macos (supported)
     runs-on: macos-latest
     steps:
@@ -67,7 +68,8 @@ jobs:
       - name: run tests
         run: bash tests/run.sh
 
-      # 何が BSD で壊れるかを 1 画面に集める。移植の作業リストになる。
+      # Collect what breaks on BSD into one screen — this doubles as the
+      # porting to-do list.
       - name: portability probe
         if: always()
         run: |
@@ -78,5 +80,5 @@ jobs:
           echo "--- chmod --reference ---"
           touch /tmp/a /tmp/b
           chmod --reference=/tmp/a /tmp/b 2>&1 | head -2 || true
-          echo "--- bash version (macOS 標準は 3.2) ---"
+          echo "--- bash version (macOS ships 3.2) ---"
           bash --version | head -1

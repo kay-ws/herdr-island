@@ -1,15 +1,15 @@
 #!/bin/bash
-# I4: _wire_both は2ファイルを順に処理するが、各ファイルの JSON 妥当性検証は
-# _wire の内部で行われる。そのため Claude 側が正常・Codex 側が壊れている場合、
-# Claude が先に書き込まれてから Codex で失敗し、_wire_both は 1 を返す ——
-# 呼び出し元は「変更していない」と報告するが、実際には Claude 側は変更済み。
+# I4: _wire_both processes the two files in order, but each file's JSON validity
+# was checked inside _wire. So with Claude fine and Codex broken, Claude gets
+# written first, Codex then fails, and _wire_both returns 1 — the caller reports
+# "nothing was changed" while Claude has in fact already been changed.
 #
-# 修正は二段構え:
-#   1. 書き込みに入る前に両ファイルを pre-flight 検証する（これで JSON 破損
-#      由来の部分適用はほぼ潰れる）
-#   2. pre-flight では予測できない書き込み失敗（権限など）で部分適用が
-#      それでも起きた場合は、rc 12 でどちらが変更されどちらが失敗したかを
-#      名指しして報告する
+# The fix has two stages:
+#   1. pre-flight both files before entering any write (which eliminates
+#      essentially all partial application caused by broken JSON)
+#   2. if a partial application still happens through a write failure pre-flight
+#      cannot predict (permissions, say), report rc 12 and name which file was
+#      changed and which one failed
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 source "$here/assert.sh"
@@ -17,7 +17,7 @@ source "$here/assert.sh"
 H="$here/../lib/hooks.sh"
 export HERDR_PLUGIN_ROOT="$here/.."
 
-# --- 1. pre-flight: Codex が壊れていれば Claude 側にも一切触れないこと ---
+# --- 1. pre-flight: a broken Codex must leave Claude entirely untouched ---
 WORK1="$(mktemp -d -p /tmp)"
 export ISLAND_CLAUDE_SETTINGS="$WORK1/settings.json"
 export ISLAND_CODEX_HOOKS="$WORK1/hooks.json"
@@ -30,16 +30,16 @@ before_codex="$(cat "$ISLAND_CODEX_HOOKS")"
 
 out1="$(bash "$H" install 2>&1)"
 rc1=$?
-assert_eq "1" "$rc1" "Codex が壊れた JSON なら install は 1 を返す"
+assert_eq "1" "$rc1" "install returns 1 when the Codex JSON is broken"
 assert_eq "$before_claude" "$(cat "$ISLAND_CLAUDE_SETTINGS")" \
-  "Claude 側は無事な JSON でも pre-flight 中断で無変更のまま"
+  "Claude stays unchanged despite valid JSON, because pre-flight aborted"
 assert_eq "$before_codex" "$(cat "$ISLAND_CODEX_HOOKS")" \
-  "Codex 側（壊れたまま）も無変更"
-assert_contains "$out1" "$ISLAND_CODEX_HOOKS" "中断の理由となったファイルを名指しする"
+  "Codex (still broken) is unchanged too"
+assert_contains "$out1" "$ISLAND_CODEX_HOOKS" "the file that caused the abort is named"
 
 rm -rf "$WORK1"
 
-# --- 2. pre-flight を通った後の書き込み失敗: 正直に部分適用を報告すること ---
+# --- 2. a write failure after a clean pre-flight: report the partial honestly ---
 WORK2="$(mktemp -d -p /tmp)"
 mkdir -p "$WORK2/claude" "$WORK2/codex"
 export ISLAND_CLAUDE_SETTINGS="$WORK2/claude/settings.json"
@@ -49,9 +49,9 @@ echo '{}' > "$ISLAND_CODEX_HOOKS"
 
 before_claude2="$(cat "$ISLAND_CLAUDE_SETTINGS")"
 
-# codex 側のディレクトリを書き込み不可にする。pre-flight は JSON の妥当性
-# しか見ないので通過するが、_wire がバックアップ／ステージファイルを
-# 作ろうとした時点で失敗する — 権限起因の失敗は pre-flight では予測できない
+# Make the codex directory unwritable. pre-flight only looks at JSON validity so
+# it passes, but _wire fails the moment it tries to create the backup or stage
+# file — a permission failure is exactly what pre-flight cannot predict.
 chmod 555 "$WORK2/codex"
 
 out2="$(bash "$H" install 2>&1)"
@@ -59,11 +59,11 @@ rc2=$?
 
 chmod 755 "$WORK2/codex"
 
-assert_eq "12" "$rc2" "pre-flight 後の書き込み失敗は 1 ではなく専用の rc 12 を返す"
-assert_contains "$out2" "$ISLAND_CLAUDE_SETTINGS" "メッセージが変更できたファイルを名指しする"
-assert_contains "$out2" "$ISLAND_CODEX_HOOKS" "メッセージが失敗したファイルを名指しする"
+assert_eq "12" "$rc2" "a write failure after pre-flight returns the dedicated rc 12, not 1"
+assert_contains "$out2" "$ISLAND_CLAUDE_SETTINGS" "the message names the file that was changed"
+assert_contains "$out2" "$ISLAND_CODEX_HOOKS" "the message names the file that failed"
 assert_eq "no" "$([ "$before_claude2" = "$(cat "$ISLAND_CLAUDE_SETTINGS")" ] && echo yes || echo no)" \
-  "Claude 側は実際に書き込まれている（『何も変更していません』ではない）"
+  "Claude really was written (this is not a 'nothing was changed' case)"
 
 rm -rf "$WORK2"
 

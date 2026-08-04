@@ -8,7 +8,7 @@ WORK="$(mktemp -d -p /tmp)"
 export HERDR_PLUGIN_STATE_DIR="$WORK/state"
 mkdir -p "$HERDR_PLUGIN_STATE_DIR"
 
-start_fake_socket || { echo "セットアップ失敗" >&2; exit 1; }
+start_fake_socket || { echo "setup failed" >&2; exit 1; }
 trap 'stop_fake_socket; rm -rf "$WORK"' EXIT
 
 V="$here/../lib/view.py"
@@ -16,56 +16,56 @@ V="$here/../lib/view.py"
 # --- set ---
 reset_capture
 python3 "$V" set
-assert_eq "0" "$?" "set は 0 を返す"
-assert_eq "agent.view.set"  "$(sent '.method')"        "method は agent.view.set"
-assert_eq "plugin:island"   "$(sent '.params.source')" "source は plugin:island"
-assert_eq "exists"          "$(sent '.params.filter.op')"           "filter は exists"
-assert_eq "reason"          "$(sent '.params.filter.field.token')"  "reason トークンの有無で絞る"
-assert_eq "attention"       "$(sent '.params.sort[0].field')"       "attention 優先で並べる"
-assert_eq "desc"            "$(sent '.params.sort[0].order')"       "attention は降順"
-assert_eq "state_change_seq" "$(sent '.params.sort[1].field')"      "次に直近の状態遷移で並べる"
-assert_eq "desc"            "$(sent '.params.sort[1].order')"       "state_change_seq も降順"
+assert_eq "0" "$?" "set returns 0"
+assert_eq "agent.view.set"  "$(sent '.method')"        "the method is agent.view.set"
+assert_eq "plugin:island"   "$(sent '.params.source')" "the source is plugin:island"
+assert_eq "exists"          "$(sent '.params.filter.op')"           "the filter is exists"
+assert_eq "reason"          "$(sent '.params.filter.field.token')"  "it filters on the presence of the reason token"
+assert_eq "attention"       "$(sent '.params.sort[0].field')"       "attention sorts first"
+assert_eq "desc"            "$(sent '.params.sort[0].order')"       "attention is descending"
+assert_eq "state_change_seq" "$(sent '.params.sort[1].field')"      "then the most recent state transition"
+assert_eq "desc"            "$(sent '.params.sort[1].order')"       "state_change_seq is descending too"
 assert_eq "yes" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || echo no)" \
-  "state に保存する"
+  "it saves to state"
 
-# --- startup で再適用 ---
+# --- startup re-applies ---
 reset_capture
 bash "$here/../bin/startup.sh" >/dev/null 2>&1
-assert_eq "agent.view.set" "$(sent '.method')" "startup は保存済み view を再適用する"
-# method だけ見ると、params を落とした restore でも通ってしまう
-assert_eq "plugin:island" "$(sent '.params.source')"       "restore も source を forward する"
-assert_eq "exists"        "$(sent '.params.filter.op')"    "restore も filter を forward する"
-assert_eq "reason"        "$(sent '.params.filter.field.token')" "restore も filter の token を forward する"
-assert_eq "2"             "$(sent '.params.sort | length')" "restore も sort を 2 件 forward する"
+assert_eq "agent.view.set" "$(sent '.method')" "startup re-applies the saved view"
+# Checking only the method would also pass for a restore that dropped the params
+assert_eq "plugin:island" "$(sent '.params.source')"       "restore forwards source too"
+assert_eq "exists"        "$(sent '.params.filter.op')"    "restore forwards filter too"
+assert_eq "reason"        "$(sent '.params.filter.field.token')" "restore forwards the filter token too"
+assert_eq "2"             "$(sent '.params.sort | length')" "restore forwards both sort entries"
 
 # --- clear ---
 reset_capture
 python3 "$V" clear
-assert_eq "0" "$?" "clear は 0 を返す"
-assert_eq "agent.view.clear" "$(sent '.method')"        "method は agent.view.clear"
-assert_eq "plugin:island"    "$(sent '.params.source')" "source 指定で他者の view を奪わない"
+assert_eq "0" "$?" "clear returns 0"
+assert_eq "agent.view.clear" "$(sent '.method')"        "the method is agent.view.clear"
+assert_eq "plugin:island"    "$(sent '.params.source')" "naming a source avoids stealing anyone else's view"
 assert_eq "no" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || echo no)" \
-  "clear で state を消す"
+  "clear deletes the state"
 
-# --- state が無ければ startup は何もしない ---
+# --- with no state, startup does nothing ---
 reset_capture
 bash "$here/../bin/startup.sh" >/dev/null 2>&1
-assert_eq "yes" "$(nothing_sent)" "保存が無ければ startup は何も送らない"
+assert_eq "yes" "$(nothing_sent)" "with nothing saved, startup sends nothing"
 
-# --- socket が到達不能なら state を書かない ---
-# exit code だけ見るテストは、この不整合に対して無力だった。
-# 送信していないのに state を書くと startup が「一度も適用されていない
-# view」を毎回復元しにいく
+# --- an unreachable socket must not write state ---
+# A test that only looks at the exit code was powerless against this
+# inconsistency. Writing state without having sent makes startup go and restore
+# a "view that was never applied" on every single start.
 rm -f "$HERDR_PLUGIN_STATE_DIR/view.json"
 reset_capture
 HERDR_SOCKET_PATH=/nonexistent/sock python3 "$V" set >/dev/null 2>&1
-assert_eq "1" "$?" "socket が繋がらなければ 1 を返す"
-assert_eq "yes" "$(nothing_sent)" "到達不能なら何も送られていない"
+assert_eq "1" "$?" "it returns 1 when the socket will not connect"
+assert_eq "yes" "$(nothing_sent)" "nothing was sent to an unreachable socket"
 assert_eq "no" "$([ -f "$HERDR_PLUGIN_STATE_DIR/view.json" ] && echo yes || echo no)" \
-  "送信できなかったときは state を書かない"
+  "no state is written when the send failed"
 
-# --- startup は socket が無くても exit 0（サーバ起動のたびに走るため） ---
+# --- startup exits 0 even with no socket (it runs on every server start) ---
 HERDR_SOCKET_PATH=/nonexistent/sock bash "$here/../bin/startup.sh" >/dev/null 2>&1
-assert_eq "0" "$?" "startup は socket が無くても exit 0"
+assert_eq "0" "$?" "startup exits 0 even with no socket"
 
 finish

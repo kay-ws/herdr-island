@@ -1,5 +1,6 @@
 #!/bin/bash
-# 現状を1画面で報告する。action なので TTY は無い（出力は plugin log へ）
+# Report the current state in one screen. This runs as an action, so there is
+# no TTY — the output lands in the plugin log.
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${HERDR_PLUGIN_ROOT:-$(cd "$here/.." && pwd)}"
@@ -23,7 +24,7 @@ for c in herdr jq python3; do
 done
 
 echo "hook wiring:"
-# エージェントごとに出す。合算値だと「片方だけ配線済み」が見えない
+# Report per agent — an aggregate count would hide "only one of them is wired".
 bash "$root/lib/hooks.sh" status | while IFS= read -r line; do echo "  $line"; done
 
 echo "filtering:"

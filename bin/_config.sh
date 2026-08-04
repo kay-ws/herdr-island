@@ -1,12 +1,13 @@
 #!/bin/bash
-# apply / revert / setup / remove が共有する config 編集手順。
-# 「検証してから置く」——候補を一時ファイルで検証し、通ったものだけ本番へ。
+# The config-editing procedure shared by apply / revert / setup / remove.
+# "Validate, then install": build the candidate in a temp file, validate that,
+# and only move it into place once it passes.
 
 island_config_path() {
   printf '%s' "${ISLAND_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/config.toml}"
 }
 
-# island_edit_config <add|remove> : rc 0=適用 / 10=変更不要 / 1=失敗
+# island_edit_config <add|remove> : rc 0=applied / 10=no change needed / 1=failed
 island_edit_config() {
   local op="$1"
   local cfg; cfg="$(island_config_path)"
@@ -22,7 +23,7 @@ island_edit_config() {
   if [ "$rc" -eq 10 ]; then rm -rf "$work"; return 10; fi
   if [ "$rc" -ne 0 ]; then rm -rf "$work"; return 1; fi
 
-  # 本番に触れる前に herdr 自身に検証させる
+  # Let herdr itself validate the candidate before we touch the real config
   if ! HERDR_CONFIG_PATH="$cand" herdr config check >"$work/check.out" 2>&1; then
     echo "config validation failed. Configuration was not modified." >&2
     cat "$work/check.out" >&2
@@ -30,35 +31,39 @@ island_edit_config() {
     return 1
   fi
 
-  # バックアップ名はミリ秒まで含める。秒単位だと apply と revert を同じ秒に
-  # 実行したとき cp が先のバックアップを黙って上書きする（cp に -n は無い）
-  # ミリ秒（%3N）は GNU 拡張で BSD/macOS では展開されず、同一秒での
-  # 衝突回避が効かない（CI の macOS ジョブで実測）。欲しいのは
-  # 「同一秒でも一意なファイル名」であってミリ秒ではないので、
-  # 一意名の生成そのものを mktemp に任せる（-p は macOS でも動作を確認済み）
+  # Backup names need sub-second uniqueness: at one-second resolution, running
+  # apply and revert within the same second makes cp silently overwrite the
+  # earlier backup (cp has no -n).
+  # Milliseconds via %3N are a GNU extension — they do not expand on BSD/macOS,
+  # so the same-second collision guard silently stops working there (measured in
+  # the macOS CI job). What we actually want is "a unique filename even within
+  # the same second", not milliseconds specifically, so hand the uniqueness
+  # itself to mktemp (-p is confirmed working on macOS too).
   local bak; bak="$(mktemp "$cfg.bak.$(date +%Y%m%d-%H%M%S).XXXXXX")" \
     || { rm -rf "$work"; return 1; }
   cp -p "$cfg" "$bak" || { rm -rf "$work"; return 1; }
 
-  # 置き換えはアトミックに。`cat "$cand" > "$cfg"` はリダイレクトの時点で
-  # $cfg を切り詰めるため、途中で失敗すると実 config が壊れたまま残る。
-  # mv がアトミックなのは同一ファイルシステム内だけなので、一時ファイルは
-  # /tmp ではなく config と同じディレクトリに作る
+  # Replace atomically. `cat "$cand" > "$cfg"` truncates $cfg the moment the
+  # redirect opens, so a failure part-way through leaves the user's real config
+  # corrupted. mv is only atomic within a single filesystem, so stage the temp
+  # file in the config's own directory rather than /tmp.
   local stage; stage="$(mktemp "$(dirname "$cfg")/.island.XXXXXX")" || { rm -rf "$work"; return 1; }
-  # 権限は cp -p で運ぶ。mktemp は 0600 で作るので、そのまま置くと利用者の
-  # config が 0600 に締まる。chmod --reference は使わない —— GNU 拡張で
-  # macOS の chmod には無く、2>/dev/null で握り潰しているため
-  # 「macOS では常に失敗して静かに 0600 のまま置く」経路になっていた。
-  # cp -p なら両方の userland で同じ 1 本の経路で済む
+  # Carry the permissions over with cp -p. mktemp creates at 0600, so installing
+  # that as-is would tighten the user's config to 0600. Do not use
+  # chmod --reference — it is a GNU extension that macOS's chmod lacks, and
+  # since the failure was swallowed by 2>/dev/null it gave us a path that
+  # "always fails on macOS and quietly installs a 0600 file". cp -p gives both
+  # userlands the same single path.
   cp -p "$cfg" "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   cat "$cand" > "$stage" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   mv -f "$stage" "$cfg" || { rm -f "$stage"; rm -rf "$work"; return 1; }
   rm -rf "$work"
 
-  # reload の失敗で rc は変えない。config は既に書けており、それは呼び出し側から
-  # 取り消せない —— ここで 1 を返すと「編集が適用されなかった」という別の嘘になる。
-  # herdr が起動していないときにも普通に失敗するので、鵜呑みにできる情報でもない。
-  # ただし黙るのも嘘なので、反映されていないことは警告として出す
+  # A failed reload does not change rc. The config is already written and the
+  # caller cannot undo that — returning 1 here would tell a different lie, that
+  # the edit was not applied. It also fails perfectly normally when herdr is not
+  # running, so it is not a signal to take at face value. Staying silent would
+  # be a lie too, so surface "not live yet" as a warning.
   if ! herdr server reload-config >/dev/null 2>&1; then
     echo "warning: config updated, but 'herdr server reload-config' failed." \
          "The change takes effect the next time herdr loads its config." >&2

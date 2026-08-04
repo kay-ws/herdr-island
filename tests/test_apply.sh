@@ -6,11 +6,12 @@ source "$here/assert.sh"
 WORK="$(mktemp -d -p /tmp)"
 trap 'rm -rf "$WORK"' EXIT
 
-# config check を差し替えるための偽 herdr。argv と HERDR_CONFIG_PATH を記録する。
+# A fake herdr standing in for config check. It records argv and HERDR_CONFIG_PATH.
 #
-# HERDR_CONFIG_PATH を記録するのが重要。実装が候補ファイルではなく実 config を
-# 検証するよう退行しても、argv だけ見ていると 13 個のアサーション全部が通る
-# ——「ゲートが動いているように見えて何も守っていない」状態を検出できない。
+# Recording HERDR_CONFIG_PATH is the important part. If the implementation
+# regressed into validating the real config instead of the candidate, watching
+# argv alone would let all 13 assertions pass — leaving "the gate looks alive
+# but protects nothing" undetectable.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/herdr" <<'EOF'
 #!/bin/bash
@@ -18,14 +19,13 @@ printf '%s\n' "$*" >> "$FAKE_HERDR_LOG"
 case "$1 $2" in
   "config check")
     printf '%s\n' "${HERDR_CONFIG_PATH:-UNSET}" >> "$FAKE_CHECKED_PATH_LOG"
-    # ISLAND_TEST_CHECK=fail のときだけ失敗させる
+    # Fail only when ISLAND_TEST_CHECK=fail
     if [ "${ISLAND_TEST_CHECK:-ok}" = "fail" ]; then
       echo "config: issues found"; exit 1
     fi
     echo "config: ok"; exit 0 ;;
   "server reload-config")
-    # ISLAND_TEST_RELOAD=fail のときだけ失敗させる。herdr が起動していない
-    # 環境を模す
+    # Fail only when ISLAND_TEST_RELOAD=fail — simulates herdr not running
     [ "${ISLAND_TEST_RELOAD:-ok}" = "fail" ] && exit 1
     exit 0 ;;
 esac
@@ -39,88 +39,91 @@ export FAKE_CHECKED_PATH_LOG="$WORK/checked_path.log"
 CFG="$WORK/config.toml"
 export ISLAND_CONFIG="$CFG"
 
-# バックアップも消すこと。$WORK は全区間で共有されるので、消さないと
-# バックアップ数を数えるアサーションが前の区間の残骸を拾う
+# Remove the backups too. $WORK is shared across every section, so leaving them
+# makes the assertions that count backups pick up leftovers from earlier sections.
 fresh() {
   printf '[ui.sidebar.agents]\nrows = [["agent"]]\n' > "$CFG"
   : > "$FAKE_HERDR_LOG"
   rm -f "$CFG".bak.*
 }
 
-# --- 正常系 ---
+# --- happy path ---
 fresh
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
-assert_eq "0" "$?" "apply は 0 を返す"
-assert_contains "$(cat "$CFG")" '$reason' "config に \$reason が入る"
-assert_contains "$(cat "$FAKE_HERDR_LOG")" "config check" "本番へ置く前に config check を通す"
-assert_contains "$(cat "$FAKE_HERDR_LOG")" "server reload-config" "反映は reload-config"
+assert_eq "0" "$?" "apply returns 0"
+assert_contains "$(cat "$CFG")" '$reason' "\$reason lands in the config"
+assert_contains "$(cat "$FAKE_HERDR_LOG")" "config check" "config check runs before anything is installed"
+assert_contains "$(cat "$FAKE_HERDR_LOG")" "server reload-config" "reload-config is what makes it live"
 assert_eq "no" "$(grep -q 'server restart' "$FAKE_HERDR_LOG" && echo yes || echo no)" \
-  "restart は呼ばない"
-assert_eq "1" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" "バックアップを 1 つ取る"
+  "restart is never called"
+assert_eq "1" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" "exactly one backup is taken"
 
-# 検証したのは候補ファイルであって実 config ではないこと。
-# これが実 config を指していたら、ゲートは常に通り何も守っていない
+# What was validated must be the candidate file, not the real config.
+# Were this pointing at the real config, the gate would always pass and protect nothing.
 checked="$(tail -1 "$FAKE_CHECKED_PATH_LOG")"
 assert_eq "no" "$([ "$checked" = "$CFG" ] && echo yes || echo no)" \
-  "検証対象は実 config ではない"
+  "the validation target is not the real config"
 assert_eq "no" "$([ "$checked" = "UNSET" ] && echo yes || echo no)" \
-  "HERDR_CONFIG_PATH を設定して検証している"
+  "validation runs with HERDR_CONFIG_PATH set"
 
-# --- 冪等 ---
+# --- idempotence ---
 : > "$FAKE_HERDR_LOG"
 before="$(cat "$CFG")"
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
-assert_eq "10" "$?" "2 回目の apply は 10"
-assert_eq "$before" "$(cat "$CFG")" "2 回目で内容が変わらない"
+assert_eq "10" "$?" "a second apply returns 10"
+assert_eq "$before" "$(cat "$CFG")" "a second apply changes nothing"
 
-# --- 検証が落ちたら本番に触れない ---
+# --- a failed validation must not touch the real file ---
 fresh
 orig="$(cat "$CFG")"
 ISLAND_TEST_CHECK=fail bash "$here/../bin/apply.sh" >/dev/null 2>&1
-assert_eq "1" "$?" "検証失敗で 1 を返す"
-assert_eq "$orig" "$(cat "$CFG")" "検証失敗時は本番ファイルを変更しない"
+assert_eq "1" "$?" "a failed validation returns 1"
+assert_eq "$orig" "$(cat "$CFG")" "a failed validation leaves the real file alone"
 assert_eq "no" "$(grep -q 'reload-config' "$FAKE_HERDR_LOG" && echo yes || echo no)" \
-  "検証失敗時は reload しない"
+  "a failed validation does not reload"
 
-# --- revert は元に戻す ---
+# --- revert restores the original ---
 fresh
 orig="$(cat "$CFG")"
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
-assert_eq "0" "$?" "revert は 0 を返す"
-assert_eq "$orig" "$(cat "$CFG")" "revert で元とバイト一致"
+assert_eq "0" "$?" "revert returns 0"
+assert_eq "$orig" "$(cat "$CFG")" "revert is byte-identical to the original"
 
-# --- バックアップ名が同一秒でも衝突しないこと ---
+# --- backup names must not collide within the same second ---
 #
-# この区間は最後に置く。config を revert 済みの状態で終えるため、途中に
-# 挟むと後続区間（$reason がある前提の「冪等」など）の前提を壊す。
-# 各区間が暗黙に前の区間の状態を引き継ぐテストなので、追加は末尾が安全。
+# This section goes last. It ends with the config already reverted, so slotting
+# it in the middle would break the assumptions of later sections (idempotence,
+# for instance, expects $reason to be present). Each section implicitly inherits
+# the previous section's state, so appending at the end is the safe place to add.
 fresh
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
 assert_eq "2" "$(find "$WORK" -name 'config.toml.bak.*' | wc -l | tr -d '[:space:]')" \
-  "同一秒内の 2 回の編集でバックアップが 2 つ残る"
+  "two edits within the same second leave two backups"
 
-# --- 元 config の権限を保つ ---
-# staging は mktemp で作るので 0600。権限を運ばないと利用者の config が
-# 黙って 0600 に締まる。chmod --reference は GNU 拡張なので使わない
-# （macOS では常に失敗し、握り潰しているので気づけない）
+# --- the original config's permissions are preserved ---
+# The staging file is made by mktemp, so it is 0600. Without carrying the
+# permissions over, the user's config silently tightens to 0600. chmod
+# --reference is not used because it is a GNU extension (it always fails on
+# macOS, and the failure is swallowed so nobody notices).
 mode_of() { ls -l "$1" | awk '{print substr($1,1,10)}'; }
 fresh
 chmod 640 "$CFG"
 bash "$here/../bin/apply.sh" >/dev/null 2>&1
-assert_eq "-rw-r-----" "$(mode_of "$CFG")" "apply は config の権限を保つ"
+assert_eq "-rw-r-----" "$(mode_of "$CFG")" "apply preserves the config permissions"
 bash "$here/../bin/revert.sh" >/dev/null 2>&1
-assert_eq "-rw-r-----" "$(mode_of "$CFG")" "revert も config の権限を保つ"
+assert_eq "-rw-r-----" "$(mode_of "$CFG")" "revert preserves them too"
 
-# --- reload が失敗しても編集自体は成立と報告する ---
-# config は既に書けており呼び出し側から取り消せないので、ここで 1 を返すのは
-# 「編集が適用されなかった」という別の嘘になる。ただし黙るのも嘘なので警告は出す
+# --- a failed reload still reports the edit itself as done ---
+# The config is already written and the caller cannot undo it, so returning 1
+# here would tell a different lie: that the edit was not applied. Staying silent
+# would be a lie too, so a warning is emitted.
 fresh
 err="$(ISLAND_TEST_RELOAD=fail bash "$here/../bin/apply.sh" 2>&1 >/dev/null)"
 rc=$?
-assert_eq "0" "$rc" "reload が失敗しても apply は 0"
-assert_contains "$err" "reload-config" "reload の失敗は警告として出す"
-assert_contains "$(cat "$CFG")" '$reason' "reload が失敗しても config は書けている"
+assert_eq "0" "$rc" "apply still returns 0 when reload fails"
+assert_contains "$err" "reload-config" "the reload failure surfaces as a warning"
+assert_contains "$(cat "$CFG")" '$reason' "the config is written even when reload fails"
 
 finish

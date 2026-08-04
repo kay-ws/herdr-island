@@ -2,8 +2,8 @@
 
 set -uo pipefail
 
-# nullglob が無いと、テストが 0 件のとき glob がリテラル "test_*.sh" のまま
-# bash に渡り「No such file or directory」で誤爆する
+# Without nullglob, zero matching tests leaves the glob as the literal
+# "test_*.sh", which is handed to bash and misfires as "No such file or directory"
 shopt -s nullglob
 
 here="$(cd "$(dirname "$0")" && pwd)"

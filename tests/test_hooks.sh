@@ -11,7 +11,7 @@ export ISLAND_CLAUDE_SETTINGS="$WORK/settings.json"
 export ISLAND_CODEX_HOOKS="$WORK/hooks.json"
 export HERDR_PLUGIN_ROOT="$here/.."
 
-# 他人の hook が入った settings.json から始める
+# Start from a settings.json that already holds somebody else's hook
 cat > "$ISLAND_CLAUDE_SETTINGS" <<'EOF'
 {"hooks":{"PreToolUse":[
   {"matcher":"Bash","hooks":[{"type":"command","command":"other-tool"}]}
@@ -21,130 +21,135 @@ echo '{}' > "$ISLAND_CODEX_HOOKS"
 
 # --- install ---
 bash "$H" install >/dev/null 2>&1
-assert_eq "0" "$?" "install は 0 を返す"
+assert_eq "0" "$?" "install returns 0"
 
-# 設定した 2 経路が入っていること。set 専用なので clear は入らない
+# The two configured set paths are present. This is set-only, so no clear here.
 assert_eq "1" "$(jq '[.hooks.PermissionRequest[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "PermissionRequest に 1 エントリ"
+  "one entry under PermissionRequest"
 assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "PreToolUse に 1 エントリ"
-# --- C2: 指す先が消えても無害な形で配線されていること ---
-# herdr plugin uninstall は remove を実行しないのでこのエントリは残る。
-# 素に `bash <path>` だと消えたパスで exit 127 になり、以後すべての
-# PermissionRequest でエラーが出る（防御は消えたファイルの中にあるので効かない）
+  "one entry under PreToolUse"
+# --- C2: the wiring must stay harmless once its target disappears ---
+# herdr plugin uninstall does not run remove, so this entry stays behind. A
+# plain `bash <path>` would exit 127 on the vanished path and throw an error on
+# every subsequent PermissionRequest (the defence is inside the file that is gone).
 cmd="$(jq -r '[.hooks.PermissionRequest[]?.hooks[]? | select(.command | test("island-reason")) | .command] | first' "$ISLAND_CLAUDE_SETTINGS")"
-assert_contains "$cmd" 'exit 0' "コマンドに存在確認と exit 0 が含まれる"
-# 実際に消えたパスを指させて、非ゼロで落ちないことを確かめる
+assert_contains "$cmd" 'exit 0' "the command carries an existence check and exit 0"
+# Point it at a genuinely missing path and confirm it does not exit non-zero
 missing="$(printf '%s' "$cmd" | sed "s#'[^']*/hooks/island-reason.sh'#'/nonexistent/island-reason.sh'#")"
 bash -c "$missing" >/dev/null 2>&1
-assert_eq "0" "$?" "指す先が無くても exit 0（利用者のエージェントを壊さない）"
+assert_eq "0" "$?" "exit 0 even with the target gone (never break the user's agent)"
 
 assert_eq "AskUserQuestion" "$(jq -r '.hooks.PreToolUse[]
   | select(.hooks[]?.command | test("island-reason")) | .matcher' "$ISLAND_CLAUDE_SETTINGS")" \
-  "PreToolUse の matcher は AskUserQuestion"
+  "the PreToolUse matcher is AskUserQuestion"
 
-# 消す側は PostToolUse に 1 本だけ。セットの契機（許可要求 / 質問）に対して
-# ツール完了は必ず起きるので確実に対になる。herdr イベントだけでは
-# auto mode の自動承認のように「止まらない」経路でクリアが起きない
+# The clearing side is a single PostToolUse entry. Against the setting triggers
+# (permission request / question), tool completion always happens, so it pairs
+# reliably. The herdr event alone never clears on paths that do not actually
+# stop, such as an auto-approval in auto mode.
 assert_eq "1" "$(jq '[.hooks.PostToolUse[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "PostToolUse に clear が 1 本"
+  "one clear entry under PostToolUse"
 assert_contains "$(jq -r '[.hooks.PostToolUse[]?.hooks[]?.command] | first' "$ISLAND_CLAUDE_SETTINGS")" \
-  'exec bash "$0" clear' "PostToolUse は clear 引数つきで呼ぶ"
+  'exec bash "$0" clear' "PostToolUse invokes it with the clear argument"
 
-# 旧実装は PostToolBatch / Stop / TTL の 3 経路で消しており、手で送った理由が
-# 即座に消えて目視確認ができなかった。戻すのは PostToolUse だけ
+# The old implementation cleared through three paths — PostToolBatch / Stop /
+# TTL — which made a reason sent by hand vanish before it could be seen.
+# Only PostToolUse comes back.
 assert_eq "0" "$(jq '[.hooks.PostToolBatch[]?.hooks[]?, .hooks.Stop[]?.hooks[]?
   | select(.command | test("island-reason"))] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "PostToolBatch / Stop には配線しない"
+  "PostToolBatch / Stop are not wired"
 
-# 他人の hook を壊していないこと
+# Nobody else's hook was broken
 assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
   | select(.command == "other-tool")] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "他人の hook は残る"
+  "the other party's hook survives"
 
-# 出力が妥当な JSON であること（壊れた JSON を書いたら次回以降すべて失敗する）
+# The output is valid JSON (writing broken JSON would fail everything afterwards)
 jq empty "$ISLAND_CLAUDE_SETTINGS" 2>/dev/null
-assert_eq "0" "$?" "settings.json は妥当な JSON のまま"
+assert_eq "0" "$?" "settings.json remains valid JSON"
 
-# --- 冪等 ---
+# --- idempotence ---
 before="$(cat "$ISLAND_CLAUDE_SETTINGS")"
 bash "$H" install >/dev/null 2>&1
-assert_eq "10" "$?" "2 回目の install は 10"
-assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "2 回目で内容が変わらない"
+assert_eq "10" "$?" "a second install returns 10"
+assert_eq "$before" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "a second install changes nothing"
 
-# --- status: 部分配線を区別できること ---
-# 診断で本当に要るのは「どちらが未配線か」。両ファイルを合算する count も
-# あったが、和集合なので片方だけ配線済みでも 3 を返し、その区別を潰していた。
-# 本番からは呼ばれていなかったので削除済み
-assert_contains "$(bash "$H" status)" "claude: 3/3" "status は claude の配線数を出す"
-assert_contains "$(bash "$H" status)" "codex: 3/3"  "status は codex の配線数を出す"
+# --- status: partial wiring must be distinguishable ---
+# What diagnosis actually needs is "which side is unwired". There used to be a
+# count that summed both files, but being a union it returned 3 even with only
+# one side wired, destroying exactly that distinction. Nothing in production
+# called it, so it was removed.
+assert_contains "$(bash "$H" status)" "claude: 3/3" "status reports the claude wiring count"
+assert_contains "$(bash "$H" status)" "codex: 3/3"  "status reports the codex wiring count"
 
-# 数え上げの出力に空白が混じらないこと。BSD/macOS の wc -l は先頭を空白で
-# パディングするため、値が正しくても文字列比較する側で落ちる。
-# 実際 CI の macOS ジョブはこれで 5 アサーション落ちた
+# The count must carry no whitespace. wc -l on BSD/macOS pads with leading
+# spaces, so a correct value still fails on the string comparison side.
+# The macOS CI job really did lose 5 assertions to this.
 n="$(bash "$H" status | sed -n 's#^claude: \([0-9]*\)/3$#\1#p')"
-assert_eq "3" "$n" "配線数は空白の混じらない裸の数値（BSD の wc -l 対策）"
+assert_eq "3" "$n" "the count is a bare number with no padding (guards against BSD wc -l)"
 
 cp "$ISLAND_CODEX_HOOKS" "$ISLAND_CODEX_HOOKS.keep"
 echo '{}' > "$ISLAND_CODEX_HOOKS"
-assert_contains "$(bash "$H" status)" "codex: 0/3"  "codex 未配線を 0/3 と出す"
-assert_contains "$(bash "$H" status)" "claude: 3/3" "片方が未配線でも claude は 3/3 のまま"
+assert_contains "$(bash "$H" status)" "codex: 0/3"  "an unwired codex reports 0/3"
+assert_contains "$(bash "$H" status)" "claude: 3/3" "claude stays 3/3 while the other side is unwired"
 
 rm -f "$ISLAND_CODEX_HOOKS"
-assert_contains "$(bash "$H" status)" "codex: file missing" "ファイル自体が無い場合を区別する"
+assert_contains "$(bash "$H" status)" "codex: file missing" "a missing file is reported distinctly"
 mv "$ISLAND_CODEX_HOOKS.keep" "$ISLAND_CODEX_HOOKS"
 
 # --- uninstall ---
 bash "$H" uninstall >/dev/null 2>&1
-assert_eq "0" "$?" "uninstall は 0 を返す"
+assert_eq "0" "$?" "uninstall returns 0"
 assert_eq "0" "$(grep -c 'island-reason' "$ISLAND_CLAUDE_SETTINGS")" \
-  "island-reason の痕跡が消える"
+  "every trace of island-reason is gone"
 assert_eq "1" "$(jq '[.hooks.PreToolUse[]?.hooks[]?
   | select(.command == "other-tool")] | length' "$ISLAND_CLAUDE_SETTINGS")" \
-  "uninstall 後も他人の hook は残る"
+  "the other party's hook survives uninstall too"
 
-# --- 壊れた JSON を渡されたら本番に触れない ---
+# --- broken JSON must leave the real file alone ---
 printf 'this is not json' > "$ISLAND_CLAUDE_SETTINGS"
 orig="$(cat "$ISLAND_CLAUDE_SETTINGS")"
 bash "$H" install >/dev/null 2>&1
-assert_eq "1" "$?" "壊れた JSON では 1 を返す"
-assert_eq "$orig" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "壊れた JSON のファイルは変更しない"
+assert_eq "1" "$?" "broken JSON returns 1"
+assert_eq "$orig" "$(cat "$ISLAND_CLAUDE_SETTINGS")" "a file with broken JSON is not modified"
 
-# --- 入れていないエージェントの設定ディレクトリを作らない ---
-# 以前は mkdir -p していたため、Codex を使っていない利用者のホームに
-# ~/.codex/ と {} が生え、status が codex: 0/3 と出た。「入れていない」と
-# 「入れたが未配線」が区別できず、doctor が何も診断できなくなる
-NOPE="$WORK/no-such-agent"          # 作らない
+# --- never create a config directory for an agent that is not installed ---
+# This used to mkdir -p, which grew a ~/.codex/ containing {} in the home
+# directory of anyone not using Codex, and made status report codex: 0/3.
+# "Not installed" then becomes indistinguishable from "installed but unwired",
+# and doctor can no longer diagnose anything.
+NOPE="$WORK/no-such-agent"          # deliberately never created
 mode_of() { ls -l "$1" | awk '{print substr($1,1,10)}'; }
 
 echo '{}' > "$ISLAND_CLAUDE_SETTINGS"
 ISLAND_CODEX_HOOKS="$NOPE/hooks.json" bash "$H" install >/dev/null 2>&1
-assert_eq "0" "$?" "片方が未導入でも install は成功する"
+assert_eq "0" "$?" "install succeeds with one side not installed"
 assert_eq "no" "$([ -d "$NOPE" ] && echo yes || echo no)" \
-  "未導入エージェントの設定ディレクトリを作らない"
+  "no config directory is created for an absent agent"
 assert_eq "3" "$(jq '[.hooks[]?[]?.hooks[]? | select(.command | test("island-reason"))] | length' \
-  "$ISLAND_CLAUDE_SETTINGS")" "導入済みの側は 3 本とも配線される"
+  "$ISLAND_CLAUDE_SETTINGS")" "the installed side gets all three wired"
 assert_contains "$(ISLAND_CODEX_HOOKS="$NOPE/hooks.json" bash "$H" status)" \
-  "codex: not installed" "status は未導入を未配線と別に出す"
+  "codex: not installed" "status reports not-installed separately from unwired"
 
-# 両方とも未導入なら、何も配線しなかったことを言う
+# With neither installed, say out loud that nothing was wired
 err="$(ISLAND_CLAUDE_SETTINGS="$NOPE/settings.json" ISLAND_CODEX_HOOKS="$NOPE/hooks.json" \
   bash "$H" install 2>&1 >/dev/null)"
-assert_contains "$err" "nothing to wire" "両方未導入なら黙って 10 を返さない"
+assert_contains "$err" "nothing to wire" "with neither installed it does not silently return 10"
 assert_eq "no" "$([ -d "$NOPE" ] && echo yes || echo no)" \
-  "両方未導入でもディレクトリを作らない"
+  "no directory is created even with neither installed"
 
-# --- settings.json の権限を保つ ---
-# staging は mktemp で作るので 0600。chmod --reference は GNU 拡張で
-# macOS には無く、握り潰していたので静かに 0600 へ化けていた
+# --- the settings.json permissions are preserved ---
+# The staging file is made by mktemp, so it is 0600. chmod --reference is a GNU
+# extension macOS lacks, and because the failure was swallowed the file silently
+# turned into 0600.
 echo '{}' > "$ISLAND_CLAUDE_SETTINGS"
 chmod 640 "$ISLAND_CLAUDE_SETTINGS"
 bash "$H" install >/dev/null 2>&1
-assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "install は権限を保つ"
+assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "install preserves the permissions"
 bash "$H" uninstall >/dev/null 2>&1
-assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "uninstall も権限を保つ"
+assert_eq "-rw-r-----" "$(mode_of "$ISLAND_CLAUDE_SETTINGS")" "uninstall preserves them too"
 
 finish
